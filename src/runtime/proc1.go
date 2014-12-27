@@ -132,7 +132,9 @@ func schedinit() {
 		}
 		procs = n
 	}
-	procresize(int32(procs))
+	if procresize(int32(procs)) != nil {
+		gothrow("unknown runnable goroutine during bootstrap")
+	}
 
 	if buildVersion == "" {
 		// Condition should never trigger.  This code just serves
@@ -651,30 +653,14 @@ func starttheworld() {
 	injectglist(gp)
 	add := needaddgcproc()
 	lock(&sched.lock)
-	if newprocs != 0 {
-		procresize(newprocs)
-		newprocs = 0
-	} else {
-		procresize(gomaxprocs)
-	}
-	sched.gcwaiting = 0
 
-	var p1 *p
-	for {
-		p := pidleget()
-		if p == nil {
-			break
-		}
-		// procresize() puts p's with work at the beginning of the list.
-		// Once we reach a p without a run queue, the rest don't have one either.
-		if p.runqhead == p.runqtail {
-			pidleput(p)
-			break
-		}
-		p.m = mget()
-		p.link = p1
-		p1 = p
+	procs := gomaxprocs
+	if newprocs != 0 {
+		procs = newprocs
+		newprocs = 0
 	}
+	p1 := procresize(procs)
+	sched.gcwaiting = 0
 	if sched.sysmonwait != 0 {
 		sched.sysmonwait = 0
 		notewakeup(&sched.sysmonnote)
@@ -697,6 +683,13 @@ func starttheworld() {
 			_newm(nil, p)
 			add = false
 		}
+	}
+
+	// Wakeup an additional proc in case we have excessive runnable goroutines
+	// in local queues or in the global queue. If we don't, the proc will park itself.
+	// If we have lots of excessive work, resetspinning will unpark additional procs as necessary.
+	if atomicload(&sched.npidle) != 0 && atomicload(&sched.nmspinning) == 0 {
+		wakep()
 	}
 
 	if add {
@@ -1884,8 +1877,9 @@ func beforefork() {
 }
 
 // Called from syscall package before fork.
+//go:linkname syscall_runtime_BeforeFork syscall.runtime_BeforeFork
 //go:nosplit
-func syscall_BeforeFork() {
+func syscall_runtime_BeforeFork() {
 	systemstack(beforefork)
 }
 
@@ -1903,8 +1897,9 @@ func afterfork() {
 }
 
 // Called from syscall package after fork in parent.
+//go:linkname syscall_runtime_AfterFork syscall.runtime_AfterFork
 //go:nosplit
-func syscall_AfterFork() {
+func syscall_runtime_AfterFork() {
 	systemstack(afterfork)
 }
 
@@ -1931,10 +1926,6 @@ func malg(stacksize int32) *g {
 //go:nosplit
 func newproc(siz int32, fn *funcval) {
 	argp := add(unsafe.Pointer(&fn), ptrSize)
-	if hasLinkRegister {
-		argp = add(argp, ptrSize) // skip caller's saved LR
-	}
-
 	pc := getcallerpc(unsafe.Pointer(&siz))
 	systemstack(func() {
 		newproc1(fn, (*uint8)(argp), siz, 0, pc)
@@ -2385,7 +2376,8 @@ func setcpuprofilerate_m(hz int32) {
 // Change number of processors.  The world is stopped, sched is locked.
 // gcworkbufs are not being modified by either the GC or
 // the write barrier code.
-func procresize(new int32) {
+// Returns list of Ps with local work, they need to be scheduled by the caller.
+func procresize(new int32) *p {
 	old := gomaxprocs
 	if old < 0 || old > _MaxGomaxprocs || new <= 0 || new > _MaxGomaxprocs {
 		gothrow("procresize: invalid arg")
@@ -2412,19 +2404,11 @@ func procresize(new int32) {
 		}
 	}
 
-	// redistribute runnable G's evenly
-	// collect all runnable goroutines in global queue preserving FIFO order
-	// FIFO order is required to ensure fairness even during frequent GCs
-	// see http://golang.org/issue/7126
-	empty := false
-	for !empty {
-		empty = true
-		for i := int32(0); i < old; i++ {
-			p := allp[i]
-			if p.runqhead == p.runqtail {
-				continue
-			}
-			empty = false
+	// free unused P's
+	for i := new; i < old; i++ {
+		p := allp[i]
+		// move all runable goroutines to the global queue
+		for p.runqhead != p.runqtail {
 			// pop from tail of local queue
 			p.runqtail--
 			gp := p.runq[p.runqtail%uint32(len(p.runq))]
@@ -2436,25 +2420,6 @@ func procresize(new int32) {
 			}
 			sched.runqsize++
 		}
-	}
-
-	// fill local queues with at most len(p.runq)/2 goroutines
-	// start at 1 because current M already executes some G and will acquire allp[0] below,
-	// so if we have a spare G we want to put it into allp[1].
-	var _p_ p
-	for i := int32(1); i < new*int32(len(_p_.runq))/2 && sched.runqsize > 0; i++ {
-		gp := sched.runqhead
-		sched.runqhead = gp.schedlink
-		if sched.runqhead == nil {
-			sched.runqtail = nil
-		}
-		sched.runqsize--
-		runqput(allp[i%new], gp)
-	}
-
-	// free unused P's
-	for i := new; i < old; i++ {
-		p := allp[i]
 		freemcache(p.mcache)
 		p.mcache = nil
 		gfpurge(p)
@@ -2463,22 +2428,39 @@ func procresize(new int32) {
 	}
 
 	_g_ := getg()
-	if _g_.m.p != nil {
-		_g_.m.p.m = nil
-	}
-	_g_.m.p = nil
-	_g_.m.mcache = nil
-	p := allp[0]
-	p.m = nil
-	p.status = _Pidle
-	acquirep(p)
-	for i := new - 1; i > 0; i-- {
-		p := allp[i]
+	if _g_.m.p != nil && _g_.m.p.id < new {
+		// continue to use the current P
+		_g_.m.p.status = _Prunning
+	} else {
+		// release the current P and acquire allp[0]
+		if _g_.m.p != nil {
+			_g_.m.p.m = nil
+		}
+		_g_.m.p = nil
+		_g_.m.mcache = nil
+		p := allp[0]
+		p.m = nil
 		p.status = _Pidle
-		pidleput(p)
+		acquirep(p)
+	}
+	var runnablePs *p
+	for i := new - 1; i >= 0; i-- {
+		p := allp[i]
+		if _g_.m.p == p {
+			continue
+		}
+		p.status = _Pidle
+		if p.runqhead == p.runqtail {
+			pidleput(p)
+		} else {
+			p.m = mget()
+			p.link = runnablePs
+			runnablePs = p
+		}
 	}
 	var int32p *int32 = &gomaxprocs // make compiler check that gomaxprocs is an int32
 	atomicstore((*uint32)(unsafe.Pointer(int32p)), uint32(new))
+	return runnablePs
 }
 
 // Associate p and the current m.
@@ -3200,7 +3182,7 @@ func haveexperiment(name string) bool {
 }
 
 //go:nosplit
-func sync_procPin() int {
+func procPin() int {
 	_g_ := getg()
 	mp := _g_.m
 
@@ -3209,7 +3191,31 @@ func sync_procPin() int {
 }
 
 //go:nosplit
-func sync_procUnpin() {
+func procUnpin() {
 	_g_ := getg()
 	_g_.m.locks--
+}
+
+//go:linkname sync_runtime_procPin sync.runtime_procPin
+//go:nosplit
+func sync_runtime_procPin() int {
+	return procPin()
+}
+
+//go:linkname sync_runtime_procUnpin sync.runtime_procUnpin
+//go:nosplit
+func sync_runtime_procUnpin() {
+	procUnpin()
+}
+
+//go:linkname sync_atomic_runtime_procPin sync/atomic.runtime_procPin
+//go:nosplit
+func sync_atomic_runtime_procPin() int {
+	return procPin()
+}
+
+//go:linkname sync_atomic_runtime_procUnpin sync/atomic.runtime_procUnpin
+//go:nosplit
+func sync_atomic_runtime_procUnpin() {
+	procUnpin()
 }
