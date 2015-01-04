@@ -20,8 +20,7 @@ TEXT runtime·rt0_go(SB),NOSPLIT,$0
 	// _cgo_init may update stackguard.
 	MOVQ	$runtime·g0(SB), DI
 	LEAQ	(-64*1024+104)(SP), BX
-	MOVQ	BX, g_stackguard0(DI)
-	MOVQ	BX, g_stackguard1(DI)
+	MOVQ	BX, g_stackguard(DI)
 	MOVQ	BX, (g_stack+stack_lo)(DI)
 	MOVQ	SP, (g_stack+stack_hi)(DI)
 
@@ -49,8 +48,7 @@ nocpuinfo:
 	MOVQ	$runtime·g0(SB), CX
 	MOVQ	(g_stack+stack_lo)(CX), AX
 	ADDQ	$const__StackGuard, AX
-	MOVQ	AX, g_stackguard0(CX)
-	MOVQ	AX, g_stackguard1(CX)
+	MOVQ	AX, g_stackguard(CX)
 
 	CMPL	runtime·iswindows(SB), $0
 	JEQ ok
@@ -429,12 +427,7 @@ TEXT runtime·cas(SB), NOSPLIT, $0-17
 	MOVL	new+12(FP), CX
 	LOCK
 	CMPXCHGL	CX, 0(BX)
-	JZ 4(PC)
-	MOVL	$0, AX
-	MOVB	AX, ret+16(FP)
-	RET
-	MOVL	$1, AX
-	MOVB	AX, ret+16(FP)
+	SETEQ	, ret+16(FP)
 	RET
 
 // bool	runtime·cas64(uint64 *val, uint64 old, uint64 new)
@@ -451,13 +444,7 @@ TEXT runtime·cas64(SB), NOSPLIT, $0-25
 	MOVQ	new+16(FP), CX
 	LOCK
 	CMPXCHGQ	CX, 0(BX)
-	JNZ	fail
-	MOVL	$1, AX
-	MOVB	AX, ret+24(FP)
-	RET
-fail:
-	MOVL	$0, AX
-	MOVB	AX, ret+24(FP)
+	SETEQ	, ret+24(FP)
 	RET
 	
 TEXT runtime·casuintptr(SB), NOSPLIT, $0-25
@@ -485,12 +472,7 @@ TEXT runtime·casp1(SB), NOSPLIT, $0-25
 	MOVQ	new+16(FP), CX
 	LOCK
 	CMPXCHGQ	CX, 0(BX)
-	JZ 4(PC)
-	MOVL	$0, AX
-	MOVB	AX, ret+24(FP)
-	RET
-	MOVL	$1, AX
-	MOVB	AX, ret+24(FP)
+	SETEQ	, ret+24(FP)
 	RET
 
 // uint32 xadd(uint32 volatile *val, int32 delta)

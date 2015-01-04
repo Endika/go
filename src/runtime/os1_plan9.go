@@ -70,7 +70,7 @@ func getpid() uint64 {
 	for c[0] == ' ' || c[0] == '\t' {
 		c = c[1:]
 	}
-	return uint64(atoi(c))
+	return uint64(_atoi(c))
 }
 
 func osinit() {
@@ -194,7 +194,7 @@ func newosproc(mp *m, stk unsafe.Pointer) {
 	}
 	pid := rfork(_RFPROC | _RFMEM | _RFNOWAIT)
 	if pid < 0 {
-		gothrow("newosproc: rfork failed")
+		throw("newosproc: rfork failed")
 	}
 	if pid == 0 {
 		tstart_plan9(mp)
@@ -254,7 +254,7 @@ func badsignal2() {
 	exits(&_badsignal[0])
 }
 
-func atoi(b []byte) int {
+func _atoi(b []byte) int {
 	n := 0
 	for len(b) > 0 && '0' <= b[0] && b[0] <= '9' {
 		n = n*10 + int(b[0]) - '0'

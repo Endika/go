@@ -20,8 +20,7 @@ TEXT runtime·rt0_go(SB),NOSPLIT,$0
 	// _cgo_init may update stackguard.
 	MOVL	$runtime·g0(SB), BP
 	LEAL	(-64*1024+104)(SP), BX
-	MOVL	BX, g_stackguard0(BP)
-	MOVL	BX, g_stackguard1(BP)
+	MOVL	BX, g_stackguard(BP)
 	MOVL	BX, (g_stack+stack_lo)(BP)
 	MOVL	SP, (g_stack+stack_hi)(BP)
 	
@@ -51,8 +50,7 @@ nocpuinfo:
 	MOVL	$runtime·g0(SB), CX
 	MOVL	(g_stack+stack_lo)(CX), AX
 	ADDL	$const__StackGuard, AX
-	MOVL	AX, g_stackguard0(CX)
-	MOVL	AX, g_stackguard1(CX)
+	MOVL	AX, g_stackguard(CX)
 
 	// skip runtime·ldt0setup(SB) and tls test after _cgo_init for non-windows
 	CMPL runtime·iswindows(SB), $0
@@ -441,12 +439,7 @@ TEXT runtime·cas(SB), NOSPLIT, $0-13
 	MOVL	new+8(FP), CX
 	LOCK
 	CMPXCHGL	CX, 0(BX)
-	JZ 4(PC)
-	MOVL	$0, AX
-	MOVB	AX, ret+12(FP)
-	RET
-	MOVL	$1, AX
-	MOVB	AX, ret+12(FP)
+	SETEQ	, ret+12(FP)
 	RET
 
 TEXT runtime·casuintptr(SB), NOSPLIT, $0-13
@@ -477,13 +470,7 @@ TEXT runtime·cas64(SB), NOSPLIT, $0-21
 	MOVL	new_hi+16(FP), CX
 	LOCK
 	CMPXCHG8B	0(BP)
-	JNZ	fail
-	MOVL	$1, AX
-	MOVB	AX, ret+20(FP)
-	RET
-fail:
-	MOVL	$0, AX
-	MOVB	AX, ret+20(FP)
+	SETEQ	, ret+20(FP)
 	RET
 
 // bool casp(void **p, void *old, void *new)
@@ -499,12 +486,7 @@ TEXT runtime·casp1(SB), NOSPLIT, $0-13
 	MOVL	new+8(FP), CX
 	LOCK
 	CMPXCHGL	CX, 0(BX)
-	JZ 4(PC)
-	MOVL	$0, AX
-	MOVB	AX, ret+12(FP)
-	RET
-	MOVL	$1, AX
-	MOVB	AX, ret+12(FP)
+	SETEQ	, ret+12(FP)
 	RET
 
 // uint32 xadd(uint32 volatile *val, int32 delta)
