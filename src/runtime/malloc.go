@@ -64,7 +64,7 @@ func mallocgc(size uintptr, typ *_type, flags uint32) unsafe.Pointer {
 		}
 		mp.mallocing = 1
 		if mp.curg != nil {
-			mp.curg.stackguard = ^uintptr(0xfff) | 0xbad
+			mp.curg.stackguard0 = ^uintptr(0xfff) | 0xbad
 		}
 	}
 
@@ -127,7 +127,7 @@ func mallocgc(size uintptr, typ *_type, flags uint32) unsafe.Pointer {
 						}
 						mp.mallocing = 0
 						if mp.curg != nil {
-							mp.curg.stackguard = mp.curg.stack.lo + _StackGuard
+							mp.curg.stackguard0 = mp.curg.stack.lo + _StackGuard
 						}
 						// Note: one releasem for the acquirem just above.
 						// The other for the acquirem at start of malloc.
@@ -308,6 +308,10 @@ marked:
 		})
 	}
 
+	if mheap_.shadow_enabled {
+		clearshadow(uintptr(x), size)
+	}
+
 	if raceenabled {
 		racemalloc(x, size)
 	}
@@ -319,7 +323,7 @@ marked:
 		}
 		mp.mallocing = 0
 		if mp.curg != nil {
-			mp.curg.stackguard = mp.curg.stack.lo + _StackGuard
+			mp.curg.stackguard0 = mp.curg.stack.lo + _StackGuard
 		}
 		// Note: one releasem for the acquirem just above.
 		// The other for the acquirem at start of malloc.
@@ -489,6 +493,7 @@ func gogc(force int32) {
 	systemstack(stoptheworld)
 	systemstack(finishsweep_m) // finish sweep before we start concurrent scan.
 	if force == 0 {            // Do as much work concurrently as possible
+		gcphase = _GCscan
 		systemstack(starttheworld)
 		gctimer.cycle.scan = nanotime()
 		// Do a concurrent heap scan before we stop the world.
@@ -803,7 +808,7 @@ func SetFinalizer(obj interface{}, finalizer interface{}) {
 			// ok - satisfies empty interface
 			goto okarg
 		}
-		if _, ok := assertE2I2(ityp, obj); ok {
+		if assertE2I2(ityp, obj, nil) {
 			goto okarg
 		}
 	}
@@ -933,12 +938,12 @@ func runfinq() {
 					if len(ityp.mhdr) != 0 {
 						// convert to interface with methods
 						// this conversion is guaranteed to succeed - we checked in SetFinalizer
-						*(*fInterface)(frame) = assertE2I(ityp, *(*interface{})(frame))
+						assertE2I(ityp, *(*interface{})(frame), (*fInterface)(frame))
 					}
 				default:
 					throw("bad kind in runfinq")
 				}
-				reflectcall(unsafe.Pointer(f.fn), frame, uint32(framesz), uint32(framesz))
+				reflectcall(nil, unsafe.Pointer(f.fn), frame, uint32(framesz), uint32(framesz))
 
 				// drop finalizer queue references to finalized object
 				f.fn = nil
