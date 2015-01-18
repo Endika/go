@@ -141,10 +141,6 @@ func main() {
 		os.Exit(2)
 	}
 	flag.Parse()
-	if *tag == "" {
-		fmt.Fprintln(os.Stderr, "you must specify a -tag")
-		os.Exit(2)
-	}
 	if flag.NArg() == 0 {
 		flag.Usage()
 	}
@@ -209,6 +205,10 @@ func main() {
 					}
 				}
 			}
+		}
+		if *tag == "" {
+			fmt.Fprintln(os.Stderr, "you must specify a -tag")
+			os.Exit(2)
 		}
 		if err := b.Do(); err != nil {
 			log.Printf("%s: %v", targ, err)
@@ -755,6 +755,7 @@ func setupOAuthClient() error {
 		ClientSecret: "8YLFgOhXIELWbO-NtF3iqIQz",
 		Endpoint:     google.Endpoint,
 		Scopes:       []string{storage.DevstorageRead_writeScope},
+		RedirectURL:  "oob",
 	}
 	url := config.AuthCodeURL("junk")
 	fmt.Println("Visit the following URL, obtain an authentication" +
@@ -775,7 +776,19 @@ func setupOAuthClient() error {
 
 func (b *Build) clean(files []string) error {
 	for _, name := range files {
-		err := os.RemoveAll(filepath.Join(b.root, name))
+		path := filepath.Join(b.root, name)
+		var err error
+		if b.OS == "windows" {
+			// Git sets some of its packfiles as 'read only',
+			// so os.RemoveAll will fail for the ".git" directory.
+			// Instead, shell out to cmd's 'del' subcommand.
+			cmd := exec.Command("cmd.exe", "/C", "del", "/Q", "/F", "/S", path)
+			cmd.Stdout = os.Stdout
+			cmd.Stderr = os.Stderr
+			err = cmd.Run()
+		} else {
+			err = os.RemoveAll(path)
+		}
 		if err != nil {
 			return err
 		}
