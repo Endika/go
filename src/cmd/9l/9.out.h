@@ -286,14 +286,14 @@ enum
 	C_ANY,
 	C_GOK,
 	C_ADDR,
+	C_TEXTSIZE,
 
 	C_NCLASS,	/* must be the last */
 };
 
 enum
 {
-	AXXX,
-	AADD,
+	AADD = A_ARCHSPECIFIC,
 	AADDCC,
 	AADDV,
 	AADDVCC,
@@ -322,11 +322,9 @@ enum
 	ABEQ,
 	ABGE,
 	ABGT,
-	ABL,
 	ABLE,
 	ABLT,
 	ABNE,
-	ABR,
 	ABVC,
 	ABVS,
 	ACMP,
@@ -510,19 +508,7 @@ enum
 	ATW,
 
 	ASYSCALL,
-	ADATA,
-	AGLOBL,
-	AGOK,
-	AHISTORY,
-	ANAME,
-	ANOP,
-	ARETURN,
-	ATEXT,
 	AWORD,
-	AEND,
-	ADYNT,
-	AINIT,
-	ASIGNAME,
 
 	ARFCI,
 
@@ -611,18 +597,12 @@ enum
 	/* more 64-bit operations */
 	AHRFID,
 
-	AUNDEF,
-	AUSEFIELD,
-	ATYPE,
-	AFUNCDATA,
-	APCDATA,
-	ACHECKNIL,
-	AVARDEF,
-	AVARKILL,
-	ADUFFCOPY,
-	ADUFFZERO,
-
-	ALAST
+	ALAST,
+	
+	// aliases
+	ABR = AJMP,
+	ABL = ACALL,
+	ARETURN = ARET,
 };
 
 /*

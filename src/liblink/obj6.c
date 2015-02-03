@@ -35,19 +35,6 @@
 #include "../cmd/6l/6.out.h"
 #include "../runtime/stack.h"
 
-static Prog zprg = {
-	.back = 2,
-	.as = AGOK,
-	.from = {
-		.type = TYPE_NONE,
-		.index = TYPE_NONE,
-	},
-	.to = {
-		.type = TYPE_NONE,
-		.index = TYPE_NONE,
-	},
-};
-
 static void
 nopout(Prog *p)
 {
@@ -58,36 +45,6 @@ nopout(Prog *p)
 	p->to.type = TYPE_NONE;
 	p->to.reg = 0;
 	p->to.name = 0;
-}
-
-static int
-isdata(Prog *p)
-{
-	return p->as == ADATA || p->as == AGLOBL;
-}
-
-static int
-iscall(Prog *p)
-{
-	return p->as == ACALL;
-}
-
-static int
-datasize(Prog *p)
-{
-	return p->from.scale;
-}
-
-static int
-textflag(Prog *p)
-{
-	return p->from.scale;
-}
-
-static void
-settextflag(Prog *p, int f)
-{
-	p->from.scale = f;
 }
 
 static void nacladdr(Link*, Prog*, Addr*);
@@ -362,25 +319,12 @@ static Prog*	stacksplit(Link*, Prog*, int32, int32, int, Prog**);
 static void	indir_cx(Link*, Addr*);
 
 static void
-parsetextconst(vlong arg, vlong *textstksiz, vlong *textarg)
-{
-	*textstksiz = arg & 0xffffffffLL;
-	if(*textstksiz & 0x80000000LL)
-		*textstksiz = -(-*textstksiz & 0xffffffffLL);
-
-	*textarg = (arg >> 32) & 0xffffffffLL;
-	if(*textarg & 0x80000000LL)
-		*textarg = 0;
-	*textarg = (*textarg+7) & ~7LL;
-}
-
-static void
 preprocess(Link *ctxt, LSym *cursym)
 {
 	Prog *p, *q, *p1, *p2;
 	int32 autoffset, deltasp;
-	int a, pcsize;
-	vlong textstksiz, textarg;
+	int a, pcsize, bpsize;
+	vlong textarg;
 
 	if(ctxt->tlsg == nil)
 		ctxt->tlsg = linklookup(ctxt, "runtime.tlsg", 0);
@@ -398,32 +342,43 @@ preprocess(Link *ctxt, LSym *cursym)
 		return;				
 
 	p = cursym->text;
-	parsetextconst(p->to.offset, &textstksiz, &textarg);
-	autoffset = textstksiz;
+	autoffset = p->to.offset;
 	if(autoffset < 0)
 		autoffset = 0;
 	
-	cursym->args = p->to.offset>>32;
-	cursym->locals = textstksiz;
+	if(framepointer_enabled && autoffset > 0) {
+		// Make room for to save a base pointer.  If autoffset == 0,
+		// this might do something special like a tail jump to
+		// another function, so in that case we omit this.
+		bpsize = ctxt->arch->ptrsize;
+		autoffset += bpsize;
+		p->to.offset += bpsize;
+	} else {
+		bpsize = 0;
+	}
 
-	if(autoffset < StackSmall && !(p->from.scale & NOSPLIT)) {
+	textarg = p->to.u.argsize;
+	cursym->args = textarg;
+	cursym->locals = p->to.offset;
+
+	if(autoffset < StackSmall && !(p->from3.offset & NOSPLIT)) {
 		for(q = p; q != nil; q = q->link) {
 			if(q->as == ACALL)
 				goto noleaf;
 			if((q->as == ADUFFCOPY || q->as == ADUFFZERO) && autoffset >= StackSmall - 8)
 				goto noleaf;
 		}
-		p->from.scale |= NOSPLIT;
+		p->from3.offset |= NOSPLIT;
 	noleaf:;
 	}
 
 	q = nil;
-	if(!(p->from.scale & NOSPLIT) || (p->from.scale & WRAPPER)) {
+	if(!(p->from3.offset & NOSPLIT) || (p->from3.offset & WRAPPER)) {
 		p = appendp(ctxt, p);
 		p = load_g_cx(ctxt, p); // load g into CX
 	}
-	if(!(cursym->text->from.scale & NOSPLIT))
-		p = stacksplit(ctxt, p, autoffset, textarg, !(cursym->text->from.scale&NEEDCTXT), &q); // emit split check
+	if(!(cursym->text->from3.offset & NOSPLIT))
+		p = stacksplit(ctxt, p, autoffset, textarg, !(cursym->text->from3.offset&NEEDCTXT), &q); // emit split check
 
 	if(autoffset) {
 		if(autoffset%ctxt->arch->regsize != 0)
@@ -447,8 +402,30 @@ preprocess(Link *ctxt, LSym *cursym)
 	if(q != nil)
 		q->pcond = p;
 	deltasp = autoffset;
+
+	if(bpsize > 0) {
+		// Save caller's BP
+		p = appendp(ctxt, p);
+		p->as = AMOVQ;
+		p->from.type = TYPE_REG;
+		p->from.reg = REG_BP;
+		p->to.type = TYPE_MEM;
+		p->to.reg = REG_SP;
+		p->to.scale = 1;
+		p->to.offset = autoffset - bpsize;
+
+		// Move current frame to BP
+		p = appendp(ctxt, p);
+		p->as = ALEAQ;
+		p->from.type = TYPE_MEM;
+		p->from.reg = REG_SP;
+		p->from.scale = 1;
+		p->from.offset = autoffset - bpsize;
+		p->to.type = TYPE_REG;
+		p->to.reg = REG_BP;
+	}
 	
-	if(cursym->text->from.scale & WRAPPER) {
+	if(cursym->text->from3.offset & WRAPPER) {
 		// if(g->panic != nil && g->panic->argp == FP) g->panic->argp = bottom-of-frame
 		//
 		//	MOVQ g_panic(CX), BX
@@ -544,7 +521,7 @@ preprocess(Link *ctxt, LSym *cursym)
 		p2->pcond = p;
 	}
 
-	if(ctxt->debugzerostack && autoffset && !(cursym->text->from.scale&NOSPLIT)) {
+	if(ctxt->debugzerostack && autoffset && !(cursym->text->from3.offset&NOSPLIT)) {
 		// 6l -Z means zero the stack frame on entry.
 		// This slows down function calls but can help avoid
 		// false positives in garbage collection.
@@ -580,12 +557,12 @@ preprocess(Link *ctxt, LSym *cursym)
 		pcsize = p->mode/8;
 		a = p->from.name;
 		if(a == NAME_AUTO)
-			p->from.offset += deltasp;
+			p->from.offset += deltasp - bpsize;
 		if(a == NAME_PARAM)
 			p->from.offset += deltasp + pcsize;
 		a = p->to.name;
 		if(a == NAME_AUTO)
-			p->to.offset += deltasp;
+			p->to.offset += deltasp - bpsize;
 		if(a == NAME_PARAM)
 			p->to.offset += deltasp + pcsize;
 
@@ -630,6 +607,18 @@ preprocess(Link *ctxt, LSym *cursym)
 			ctxt->diag("unbalanced PUSH/POP");
 
 		if(autoffset) {
+			if(bpsize > 0) {
+				// Restore caller's BP
+				p->as = AMOVQ;
+				p->from.type = TYPE_MEM;
+				p->from.reg = REG_SP;
+				p->from.scale = 1;
+				p->from.offset = autoffset - bpsize;
+				p->to.type = TYPE_REG;
+				p->to.reg = REG_BP;
+				p = appendp(ctxt, p);
+			}
+
 			p->as = AADJSP;
 			p->from.type = TYPE_CONST;
 			p->from.offset = -autoffset;
@@ -846,7 +835,7 @@ follow(Link *ctxt, LSym *s)
 
 	ctxt->cursym = s;
 
-	firstp = ctxt->arch->prg();
+	firstp = emallocz(sizeof(Prog));
 	lastp = firstp;
 	xfol(ctxt, s->text, &lastp);
 	lastp->link = nil;
@@ -980,7 +969,7 @@ loop:
 				goto loop;
 			}
 		} /* */
-		q = ctxt->arch->prg();
+		q = emallocz(sizeof(Prog));
 		q->as = AJMP;
 		q->lineno = p->lineno;
 		q->to.type = TYPE_BRANCH;
@@ -1038,16 +1027,6 @@ loop:
 	goto loop;
 }
 
-static Prog*
-prg(void)
-{
-	Prog *p;
-
-	p = emallocz(sizeof(*p));
-	*p = zprg;
-	return p;
-}
-
 LinkArch linkamd64 = {
 	.name = "amd64",
 	.thechar = '6',
@@ -1055,31 +1034,12 @@ LinkArch linkamd64 = {
 
 	.preprocess = preprocess,
 	.assemble = span6,
-	.datasize = datasize,
 	.follow = follow,
-	.iscall = iscall,
-	.isdata = isdata,
-	.prg = prg,
 	.progedit = progedit,
-	.settextflag = settextflag,
-	.textflag = textflag,
 
 	.minlc = 1,
 	.ptrsize = 8,
 	.regsize = 8,
-
-	.ACALL = ACALL,
-	.ADATA = ADATA,
-	.AEND = AEND,
-	.AFUNCDATA = AFUNCDATA,
-	.AGLOBL = AGLOBL,
-	.AJMP = AJMP,
-	.ANOP = ANOP,
-	.APCDATA = APCDATA,
-	.ARET = ARET,
-	.ATEXT = ATEXT,
-	.ATYPE = ATYPE,
-	.AUSEFIELD = AUSEFIELD,
 };
 
 LinkArch linkamd64p32 = {
@@ -1089,29 +1049,10 @@ LinkArch linkamd64p32 = {
 
 	.preprocess = preprocess,
 	.assemble = span6,
-	.datasize = datasize,
 	.follow = follow,
-	.iscall = iscall,
-	.isdata = isdata,
-	.prg = prg,
 	.progedit = progedit,
-	.settextflag = settextflag,
-	.textflag = textflag,
 
 	.minlc = 1,
 	.ptrsize = 4,
 	.regsize = 8,
-
-	.ACALL = ACALL,
-	.ADATA = ADATA,
-	.AEND = AEND,
-	.AFUNCDATA = AFUNCDATA,
-	.AGLOBL = AGLOBL,
-	.AJMP = AJMP,
-	.ANOP = ANOP,
-	.APCDATA = APCDATA,
-	.ARET = ARET,
-	.ATEXT = ATEXT,
-	.ATYPE = ATYPE,
-	.AUSEFIELD = AUSEFIELD,
 };

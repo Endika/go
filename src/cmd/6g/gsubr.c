@@ -198,9 +198,9 @@ ggloblnod(Node *nam)
 	p->to.type = TYPE_CONST;
 	p->to.offset = nam->type->width;
 	if(nam->readonly)
-		p->from.scale = RODATA;
+		p->from3.offset = RODATA;
 	if(nam->type != T && !haspointers(nam->type))
-		p->from.scale |= NOPTR;
+		p->from3.offset |= NOPTR;
 }
 
 void
@@ -225,7 +225,7 @@ ggloblsym(Sym *s, int32 width, int8 flags)
 	p->from.sym = linksym(s);
 	p->to.type = TYPE_CONST;
 	p->to.offset = width;
-	p->from.scale = flags;
+	p->from3.offset = flags;
 }
 
 int
@@ -285,6 +285,9 @@ ginit(void)
 	if(nacl) {
 		reg[REG_BP]++;
 		reg[REG_R15]++;
+	} else if(framepointer_enabled) {
+		// BP is part of the calling convention of framepointer_enabled.
+		reg[REG_BP]++;
 	}
 }
 
@@ -298,6 +301,8 @@ gclean(void)
 	if(nacl) {
 		reg[REG_BP]--;
 		reg[REG_R15]--;
+	} else if(framepointer_enabled) {
+		reg[REG_BP]--;
 	}
 
 
@@ -1324,7 +1329,7 @@ optoas(int op, Type *t)
 	if(t == T)
 		fatal("optoas: t is nil");
 
-	a = AGOK;
+	a = AXXX;
 	switch(CASE(op, simtype[t->etype])) {
 	default:
 		fatal("optoas: no entry %O-%T", op, t);

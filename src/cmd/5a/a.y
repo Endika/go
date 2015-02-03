@@ -51,7 +51,7 @@
 %left	'*' '/' '%'
 %token	<lval>	LTYPE1 LTYPE2 LTYPE3 LTYPE4 LTYPE5
 %token	<lval>	LTYPE6 LTYPE7 LTYPE8 LTYPE9 LTYPEA
-%token	<lval>	LTYPEB LTYPEC LTYPED LTYPEE
+%token	<lval>	LTYPEB LGLOBL LTYPEC LTYPED LTYPEE
 %token	<lval>	LTYPEG LTYPEH LTYPEI LTYPEJ LTYPEK
 %token	<lval>	LTYPEL LTYPEM LTYPEN LTYPEBX LTYPEPLD
 %token	<lval>	LCONST LSP LSB LFP LPC
@@ -62,7 +62,7 @@
 %token	<sym>	LNAME LLAB LVAR
 %type	<lval>	con expr oexpr pointer offset sreg spreg creg
 %type	<lval>	rcon cond reglist
-%type	<addr>	gen rel reg regreg freg shift fcon frcon
+%type	<addr>	gen rel reg regreg freg shift fcon frcon textsize
 %type	<addr>	imm ximm name oreg ireg nireg ioreg imsr
 %%
 prog:
@@ -210,35 +210,49 @@ inst:
 		outcode($1, $2, &nullgen, 0, &nullgen);
 	}
 /*
- * TEXT/GLOBL
+ * TEXT
  */
-|	LTYPEB name ',' imm
+|	LTYPEB name ',' '$' textsize
 	{
 		settext($2.sym);
-		$4.type = TYPE_TEXTSIZE;
-		$4.u.argsize = ArgsSizeUnknown;
+		outcode($1, Always, &$2, 0, &$5);
+	}
+|	LTYPEB name ',' con ',' '$' textsize
+	{
+		settext($2.sym);
+		outcode($1, Always, &$2, 0, &$7);
+		if(pass > 1) {
+			lastpc->from3.type = TYPE_CONST;
+			lastpc->from3.offset = $4;
+		}
+	}
+/*
+ * GLOBL
+ */
+|	LGLOBL name ',' imm
+	{
+		settext($2.sym);
 		outcode($1, Always, &$2, 0, &$4);
 	}
-|	LTYPEB name ',' con ',' imm
+|	LGLOBL name ',' con ',' imm
 	{
 		settext($2.sym);
-		$6.type = TYPE_TEXTSIZE;
-		$6.u.argsize = ArgsSizeUnknown;
-		outcode($1, Always, &$2, $4, &$6);
-	}
-|	LTYPEB name ',' con ',' imm '-' con
-	{
-		settext($2.sym);
-		$6.type = TYPE_TEXTSIZE;
-		$6.u.argsize = $8;
-		outcode($1, Always, &$2, $4, &$6);
+		outcode($1, Always, &$2, 0, &$6);
+		if(pass > 1) {
+			lastpc->from3.type = TYPE_CONST;
+			lastpc->from3.offset = $4;
+		}
 	}
 /*
  * DATA
  */
 |	LTYPEC name '/' con ',' ximm
 	{
-		outcode($1, Always, &$2, $4, &$6);
+		outcode($1, Always, &$2, 0, &$6);
+		if(pass > 1) {
+			lastpc->from3.type = TYPE_CONST;
+			lastpc->from3.offset = $4;
+		}
 	}
 /*
  * CASE
@@ -285,7 +299,7 @@ inst:
 		g.offset =
 			(0xe << 24) |		/* opcode */
 			($1 << 20) |		/* MCR/MRC */
-			($2 << 28) |		/* scond */
+			(($2^C_SCOND_XOR) << 28) |		/* scond */
 			(($3 & 15) << 8) |	/* coprocessor number */
 			(($5 & 7) << 21) |	/* coprocessor operation */
 			(($7 & 15) << 12) |	/* arm register */
@@ -378,6 +392,32 @@ rel:
 			yyerror("undefined label: %s", $1->labelname);
 		$$.type = TYPE_BRANCH;
 		$$.offset = $1->value + $2;
+	}
+
+textsize:
+	LCONST
+	{
+		$$.type = TYPE_TEXTSIZE;
+		$$.offset = $1;
+		$$.u.argsize = ArgsSizeUnknown;
+	}
+|	'-' LCONST
+	{
+		$$.type = TYPE_TEXTSIZE;
+		$$.offset = -$2;
+		$$.u.argsize = ArgsSizeUnknown;
+	}
+|	LCONST '-' LCONST
+	{
+		$$.type = TYPE_TEXTSIZE;
+		$$.offset = $1;
+		$$.u.argsize = $3;
+	}
+|	'-' LCONST '-' LCONST
+	{
+		$$.type = TYPE_TEXTSIZE;
+		$$.offset = -$2;
+		$$.u.argsize = $4;
 	}
 
 ximm:	'$' con

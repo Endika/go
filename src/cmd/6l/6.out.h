@@ -38,8 +38,7 @@
 
 enum
 {
-	AXXX,
-	AAAA,
+	AAAA = A_ARCHSPECIFIC,
 	AAAD,
 	AAAM,
 	AAAS,
@@ -69,7 +68,6 @@ enum
 	ABTSL,
 	ABTSW,
 	ABYTE,
-	ACALL,
 	ACLC,
 	ACLD,
 	ACLI,
@@ -83,7 +81,6 @@ enum
 	ACMPSW,
 	ADAA,
 	ADAS,
-	ADATA,
 	ADECB,
 	ADECL,
 	ADECQ,
@@ -92,9 +89,6 @@ enum
 	ADIVL,
 	ADIVW,
 	AENTER,
-	AGLOBL,
-	AGOK,
-	AHISTORY,
 	AHLT,
 	AIDIVB,
 	AIDIVL,
@@ -127,7 +121,6 @@ enum
 	AJLS,
 	AJLT,
 	AJMI,
-	AJMP,
 	AJNE,
 	AJOC,
 	AJOS,
@@ -170,11 +163,9 @@ enum
 	AMULB,
 	AMULL,
 	AMULW,
-	ANAME,
 	ANEGB,
 	ANEGL,
 	ANEGW,
-	ANOP,
 	ANOTB,
 	ANOTL,
 	ANOTW,
@@ -208,7 +199,6 @@ enum
 	ARCRW,
 	AREP,
 	AREPN,
-	ARET,
 	AROLB,
 	AROLL,
 	AROLW,
@@ -265,7 +255,6 @@ enum
 	ATESTB,
 	ATESTL,
 	ATESTW,
-	ATEXT,
 	AVERR,
 	AVERW,
 	AWAIT,
@@ -386,12 +375,8 @@ enum
 	AFYL2X,
 	AFYL2XP1,
 
-	AEND,
 
-	ADYNT_,
-	AINIT_,
 
-	ASIGNAME,
 
 	/* extra 32-bit operations */
 	ACMPXCHGB,
@@ -745,7 +730,6 @@ enum
 	ABSWAPL,
 	ABSWAPQ,
 	
-	AUNDEF,
 
 	AAESENC,
 	AAESENCLAST,
@@ -757,15 +741,6 @@ enum
 	APSHUFD,
 	APCLMULQDQ,
 	
-	AUSEFIELD,
-	ATYPE,
-	AFUNCDATA,
-	APCDATA,
-	ACHECKNIL,
-	AVARDEF,
-	AVARKILL,
-	ADUFFCOPY,
-	ADUFFZERO,
 	
 	ALAST
 };

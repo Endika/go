@@ -35,40 +35,6 @@
 #include "../runtime/stack.h"
 #include "../runtime/funcdata.h"
 
-static Prog zprg = {
-	.as = AGOK,
-};
-
-static int
-isdata(Prog *p)
-{
-	return p->as == ADATA || p->as == AGLOBL;
-}
-
-static int
-iscall(Prog *p)
-{
-	return p->as == ABL;
-}
-
-static int
-datasize(Prog *p)
-{
-	return p->reg;
-}
-
-static int
-textflag(Prog *p)
-{
-	return p->reg;
-}
-
-static void
-settextflag(Prog *p, int f)
-{
-	p->reg = f;
-}
-
 static void
 progedit(Link *ctxt, Prog *p)
 {
@@ -163,24 +129,11 @@ progedit(Link *ctxt, Prog *p)
 static Prog*	stacksplit(Link*, Prog*, int32, int);
 
 static void
-parsetextconst(vlong arg, vlong *textstksiz, vlong *textarg)
-{
-	*textstksiz = arg & 0xffffffffLL;
-	if(*textstksiz & 0x80000000LL)
-		*textstksiz = -(-*textstksiz & 0xffffffffLL);
-
-	*textarg = (arg >> 32) & 0xffffffffLL;
-	if(*textarg & 0x80000000LL)
-		*textarg = 0;
-	*textarg = (*textarg+7) & ~7LL;
-}
-
-static void
 preprocess(Link *ctxt, LSym *cursym)
 {
 	Prog *p, *q, *p1, *p2, *q1;
 	int o, mov, aoffset;
-	vlong textstksiz, textarg;
+	vlong textstksiz;
 	int32 autosize;
 
 	if(ctxt->symmorestack[0] == nil) {
@@ -195,9 +148,9 @@ preprocess(Link *ctxt, LSym *cursym)
 		return;				
 
 	p = cursym->text;
-	parsetextconst(p->to.offset, &textstksiz, &textarg);
+	textstksiz = p->to.offset;
 	
-	cursym->args = p->to.offset>>32;
+	cursym->args = p->to.u.argsize;
 	cursym->locals = textstksiz;
 
 	/*
@@ -378,10 +331,10 @@ preprocess(Link *ctxt, LSym *cursym)
 			else
 				if(autosize & 4)
 					autosize += 4;
-			p->to.offset = ((uint64)p->to.offset & (0xffffffffull<<32)) | (uint32)(autosize-8);
+			p->to.offset = autosize-8;
 
-			if(!(p->reg & NOSPLIT))
-				p = stacksplit(ctxt, p, autosize, !(cursym->text->reg&NEEDCTXT)); // emit split check
+			if(!(p->from3.offset & NOSPLIT))
+				p = stacksplit(ctxt, p, autosize, !(cursym->text->from3.offset&NEEDCTXT)); // emit split check
 
 			q = p;
 			if(autosize) {
@@ -433,7 +386,7 @@ preprocess(Link *ctxt, LSym *cursym)
 			if(q->as == AMOVDU)
 				q->spadj = -aoffset;
 
-			if(cursym->text->reg & WRAPPER) {
+			if(cursym->text->from3.offset & WRAPPER) {
 				// if(g->panic != nil && g->panic->argp == FP) g->panic->argp = bottom-of-frame
 				//
 				//	MOVD g_panic(g), R3
@@ -537,7 +490,7 @@ preprocess(Link *ctxt, LSym *cursym)
 			if(cursym->text->mark & LEAF) {
 				if(!autosize) {
 					p->as = ABR;
-					p->from = zprg.from;
+					p->from = zprog.from;
 					p->to.type = TYPE_REG;
 					p->to.reg = REG_LR;
 					p->mark |= BRANCH;
@@ -551,7 +504,7 @@ preprocess(Link *ctxt, LSym *cursym)
 				p->to.reg = REGSP;
 				p->spadj = -autosize;
 
-				q = ctxt->arch->prg();
+				q = emallocz(sizeof(Prog));
 				q->as = ABR;
 				q->lineno = p->lineno;
 				q->to.type = TYPE_REG;
@@ -571,7 +524,7 @@ preprocess(Link *ctxt, LSym *cursym)
 			p->to.type = TYPE_REG;
 			p->to.reg = REGTMP;
 
-			q = ctxt->arch->prg();
+			q = emallocz(sizeof(Prog));
 			q->as = AMOVD;
 			q->lineno = p->lineno;
 			q->from.type = TYPE_REG;
@@ -585,7 +538,7 @@ preprocess(Link *ctxt, LSym *cursym)
 
 			if(0) {
 				// Debug bad returns
-				q = ctxt->arch->prg();
+				q = emallocz(sizeof(Prog));
 				q->as = AMOVD;
 				q->lineno = p->lineno;
 				q->from.type = TYPE_MEM;
@@ -600,7 +553,7 @@ preprocess(Link *ctxt, LSym *cursym)
 			}
 
 			if(autosize) {
-				q = ctxt->arch->prg();
+				q = emallocz(sizeof(Prog));
 				q->as = AADD;
 				q->lineno = p->lineno;
 				q->from.type = TYPE_CONST;
@@ -613,7 +566,7 @@ preprocess(Link *ctxt, LSym *cursym)
 				p->link = q;
 			}
 
-			q1 = ctxt->arch->prg();
+			q1 = emallocz(sizeof(Prog));
 			q1->as = ABR;
 			q1->lineno = p->lineno;
 			q1->to.type = TYPE_REG;
@@ -827,7 +780,7 @@ follow(Link *ctxt, LSym *s)
 
 	ctxt->cursym = s;
 
-	firstp = ctxt->arch->prg();
+	firstp = emallocz(sizeof(Prog));
 	lastp = firstp;
 	xfol(ctxt, s->text, &lastp);
 	lastp->link = nil;
@@ -903,7 +856,7 @@ loop:
 				continue;
 		copy:
 			for(;;) {
-				r = ctxt->arch->prg();
+				r = emallocz(sizeof(Prog));
 				*r = *p;
 				if(!(r->mark&FOLL))
 					print("cant happen 1\n");
@@ -930,7 +883,7 @@ loop:
 		}
 
 		a = ABR;
-		q = ctxt->arch->prg();
+		q = emallocz(sizeof(Prog));
 		q->as = a;
 		q->lineno = p->lineno;
 		q->to.type = TYPE_BRANCH;
@@ -960,16 +913,6 @@ loop:
 	goto loop;
 }
 
-static Prog*
-prg(void)
-{
-	Prog *p;
-
-	p = emallocz(sizeof(*p));
-	*p = zprg;
-	return p;
-}
-
 LinkArch linkppc64 = {
 	.name = "ppc64",
 	.thechar = '9',
@@ -977,31 +920,12 @@ LinkArch linkppc64 = {
 
 	.preprocess = preprocess,
 	.assemble = span9,
-	.datasize = datasize,
 	.follow = follow,
-	.iscall = iscall,
-	.isdata = isdata,
-	.prg = prg,
 	.progedit = progedit,
-	.settextflag = settextflag,
-	.textflag = textflag,
 
 	.minlc = 4,
 	.ptrsize = 8,
 	.regsize = 8,
-
-	.ACALL = ABL,
-	.ADATA = ADATA,
-	.AEND = AEND,
-	.AFUNCDATA = AFUNCDATA,
-	.AGLOBL = AGLOBL,
-	.AJMP = ABR,
-	.ANOP = ANOP,
-	.APCDATA = APCDATA,
-	.ARET = ARETURN,
-	.ATEXT = ATEXT,
-	.ATYPE = ATYPE,
-	.AUSEFIELD = AUSEFIELD,
 };
 
 LinkArch linkppc64le = {
@@ -1011,29 +935,10 @@ LinkArch linkppc64le = {
 
 	.preprocess = preprocess,
 	.assemble = span9,
-	.datasize = datasize,
 	.follow = follow,
-	.iscall = iscall,
-	.isdata = isdata,
-	.prg = prg,
 	.progedit = progedit,
-	.settextflag = settextflag,
-	.textflag = textflag,
 
 	.minlc = 4,
 	.ptrsize = 8,
 	.regsize = 8,
-
-	.ACALL = ABL,
-	.ADATA = ADATA,
-	.AEND = AEND,
-	.AFUNCDATA = AFUNCDATA,
-	.AGLOBL = AGLOBL,
-	.AJMP = ABR,
-	.ANOP = ANOP,
-	.APCDATA = APCDATA,
-	.ARET = ARETURN,
-	.ATEXT = ATEXT,
-	.ATYPE = ATYPE,
-	.AUSEFIELD = AUSEFIELD,
 };

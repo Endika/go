@@ -454,7 +454,7 @@ struct
 	"FMOVS",	LFMOV, AFMOVS,
 	"FMOVDCC",	LFCONV,	AFMOVDCC,	/* fmr. */
 
-	"GLOBL",	LTEXT, AGLOBL,
+	"GLOBL",	LGLOBL, AGLOBL,
 
 	"MOVB",		LMOVB, AMOVB,
 	"MOVBZ",	LMOVB, AMOVBZ,
@@ -650,8 +650,6 @@ cclean(void)
 	outcode(AEND, &nullgen, 0, &nullgen);
 }
 
-static Prog *lastpc;
-
 void
 outcode(int a, Addr *g1, int reg, Addr *g2)
 {
@@ -672,7 +670,7 @@ outcode(int a, Addr *g1, int reg, Addr *g2)
 		reg = g2->scale;
 	}
 
-	p = ctxt->arch->prg();
+	p = emallocz(sizeof(Prog));
 	p->as = a;
 	p->lineno = lineno;
 	if(nosched)
@@ -702,7 +700,7 @@ outgcode(int a, Addr *g1, int reg, Addr *g2, Addr *g3)
 	if(pass == 1)
 		goto out;
 
-	p = ctxt->arch->prg();
+	p = emallocz(sizeof(Prog));
 	p->as = a;
 	p->lineno = lineno;
 	if(nosched)

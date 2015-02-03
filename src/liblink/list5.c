@@ -33,6 +33,7 @@
 #include <bio.h>
 #include <link.h>
 #include "../cmd/5l/5.out.h"
+#include "../runtime/funcdata.h"
 
 enum
 {
@@ -89,7 +90,7 @@ Pconv(Fmt *fp)
 	bigP = p;
 	a = p->as;
 	s = p->scond;
-	strcpy(sc, extra[s & C_SCOND]);
+	strcpy(sc, extra[(s & C_SCOND) ^ C_SCOND_XOR]);
 	if(s & C_SBIT)
 		strcat(sc, ".S");
 	if(s & C_PBIT)
@@ -108,10 +109,10 @@ Pconv(Fmt *fp)
 			sprint(str, "%.5lld (%L)	%A%s	%D,%D", p->pc, p->lineno, a, sc, &p->from, &p->to);
 	} else
 	if(a == ADATA)
-		sprint(str, "%.5lld (%L)	%A	%D/%d,%D", p->pc, p->lineno, a, &p->from, p->reg, &p->to);
+		sprint(str, "%.5lld (%L)	%A	%D/%lld,%D", p->pc, p->lineno, a, &p->from, p->from3.offset, &p->to);
 	else
 	if(p->as == ATEXT)
-		sprint(str, "%.5lld (%L)	%A	%D,%d,%D", p->pc, p->lineno, a, &p->from, p->reg, &p->to);
+		sprint(str, "%.5lld (%L)	%A	%D,%lld,%D", p->pc, p->lineno, a, &p->from, p->from3.offset, &p->to);
 	else
 	if(p->reg == 0)
 		sprint(str, "%.5lld (%L)	%A%s	%D,%D", p->pc, p->lineno, a, sc, &p->from, &p->to);
@@ -163,7 +164,10 @@ Dconv(Fmt *fp)
 		break;
 
 	case TYPE_TEXTSIZE:
-		sprint(str, "$%lld-%d", a->offset, a->u.argsize);
+		if(a->u.argsize == ArgsSizeUnknown)
+			sprint(str, "$%lld", a->offset);
+		else
+			sprint(str, "$%lld-%lld", a->offset, a->u.argsize);
 		break;
 
 	case TYPE_SHIFT:

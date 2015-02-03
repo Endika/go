@@ -210,7 +210,7 @@ struct	Reloc
 };
 
 // TODO(rsc): Describe prog.
-// TOOD(rsc): Make ARM scond == 0 mean C_SCOND_NONE.
+// TODO(rsc): Describe TEXT/GLOBL flag in from3, DATA width in from3.
 struct	Prog
 {
 	vlong	pc;
@@ -224,7 +224,7 @@ struct	Prog
 	int16	reg; // arm, ppc64 only (e.g., ADD from, reg, to);
 		     // starts at 0 for both GPRs and FPRs;
 		     // also used for ADATA width on arm, ppc64
-	Addr	from3; // ppc64 only (e.g., RLWM/FMADD from, reg, from3, to)
+	Addr	from3; // addl source argument (e.g., RLWM/FMADD from, reg, from3, to)
 	Addr	to;
 	
 	// for 5g, 6g, 8g internal use
@@ -245,8 +245,37 @@ struct	Prog
 
 	char	width;	/* fake for DATA */
 	char	mode;	/* 16, 32, or 64 in 6l, 8l; internal use in 5g, 6g, 8g */
+};
+
+extern Prog zprog; // zeroed Prog
+
+// Prog.as opcodes.
+// These are the portable opcodes, common to all architectures.
+// Each architecture defines many more arch-specific opcodes,
+// with values starting at A_ARCHSPECIFIC.
+enum {
+	AXXX = 0,
+
+	ACALL,
+	ACHECKNIL,
+	ADATA,
+	ADUFFCOPY,
+	ADUFFZERO,
+	AEND,
+	AFUNCDATA,
+	AGLOBL,
+	AJMP,
+	ANOP,
+	APCDATA,
+	ARET,
+	ATEXT,
+	ATYPE,
+	AUNDEF,
+	AUSEFIELD,
+	AVARDEF,
+	AVARKILL,
 	
-	/*c2go uchar TEXTFLAG; */
+	A_ARCHSPECIFIC, // first architecture-specific opcode value
 };
 
 // prevent incompatible type signatures between liblink and 8l on Plan 9
@@ -598,31 +627,12 @@ struct LinkArch
 
 	void	(*preprocess)(Link*, LSym*);
 	void	(*assemble)(Link*, LSym*);
-	int	(*datasize)(Prog*);
 	void	(*follow)(Link*, LSym*);
-	int	(*iscall)(Prog*);
-	int	(*isdata)(Prog*);
-	Prog*	(*prg)(void);
 	void	(*progedit)(Link*, Prog*);
-	void	(*settextflag)(Prog*, int);
-	int	(*textflag)(Prog*);
 
 	int	minlc;
 	int	ptrsize;
 	int	regsize;
-	
-	int	ACALL;
-	int	ADATA;
-	int	AEND;
-	int	AFUNCDATA;
-	int	AGLOBL;
-	int	AJMP;
-	int	ANOP;
-	int	APCDATA;
-	int	ARET;
-	int	ATEXT;
-	int	ATYPE;
-	int	AUSEFIELD;
 };
 
 /* executable header types */

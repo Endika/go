@@ -35,51 +35,6 @@
 #include "../cmd/8l/8.out.h"
 #include "../runtime/stack.h"
 
-static Prog zprg = {
-	.back = 2,
-	.as = AGOK,
-	.from = {
-		.type = TYPE_NONE,
-		.index = REG_NONE,
-		.scale = 1,
-	},
-	.to = {
-		.type = TYPE_NONE,
-		.index = REG_NONE,
-		.scale = 1,
-	},
-};
-
-static int
-isdata(Prog *p)
-{
-	return p->as == ADATA || p->as == AGLOBL;
-}
-
-static int
-iscall(Prog *p)
-{
-	return p->as == ACALL;
-}
-
-static int
-datasize(Prog *p)
-{
-	return p->from.scale;
-}
-
-static int
-textflag(Prog *p)
-{
-	return p->from.scale;
-}
-
-static void
-settextflag(Prog *p, int f)
-{
-	p->from.scale = f;
-}
-
 static int
 canuselocaltls(Link *ctxt)
 {
@@ -259,16 +214,6 @@ progedit(Link *ctxt, Prog *p)
 	}
 }
 
-static Prog*
-prg(void)
-{
-	Prog *p;
-
-	p = emallocz(sizeof(*p));
-	*p = zprg;
-	return p;
-}
-
 static Prog*	load_g_cx(Link*, Prog*);
 static Prog*	stacksplit(Link*, Prog*, int32, int, Prog**);
 
@@ -302,12 +247,12 @@ preprocess(Link *ctxt, LSym *cursym)
 
 	q = nil;
 
-	if(!(p->from.scale & NOSPLIT) || (p->from.scale & WRAPPER)) {
+	if(!(p->from3.offset & NOSPLIT) || (p->from3.offset & WRAPPER)) {
 		p = appendp(ctxt, p);
 		p = load_g_cx(ctxt, p); // load g into CX
 	}
-	if(!(cursym->text->from.scale & NOSPLIT))
-		p = stacksplit(ctxt, p, autoffset, !(cursym->text->from.scale&NEEDCTXT), &q); // emit split check
+	if(!(cursym->text->from3.offset & NOSPLIT))
+		p = stacksplit(ctxt, p, autoffset, !(cursym->text->from3.offset&NEEDCTXT), &q); // emit split check
 
 	if(autoffset) {
 		p = appendp(ctxt, p);
@@ -330,7 +275,7 @@ preprocess(Link *ctxt, LSym *cursym)
 		q->pcond = p;
 	deltasp = autoffset;
 	
-	if(cursym->text->from.scale & WRAPPER) {
+	if(cursym->text->from3.offset & WRAPPER) {
 		// if(g->panic != nil && g->panic->argp == FP) g->panic->argp = bottom-of-frame
 		//
 		//	MOVL g_panic(CX), BX
@@ -401,7 +346,7 @@ preprocess(Link *ctxt, LSym *cursym)
 		p2->pcond = p;
 	}
 	
-	if(ctxt->debugzerostack && autoffset && !(cursym->text->from.scale&NOSPLIT)) {
+	if(ctxt->debugzerostack && autoffset && !(cursym->text->from3.offset&NOSPLIT)) {
 		// 8l -Z means zero the stack frame on entry.
 		// This slows down function calls but can help avoid
 		// false positives in garbage collection.
@@ -696,7 +641,7 @@ follow(Link *ctxt, LSym *s)
 
 	ctxt->cursym = s;
 
-	firstp = ctxt->arch->prg();
+	firstp = emallocz(sizeof(Prog));
 	lastp = firstp;
 	xfol(ctxt, s->text, &lastp);
 	lastp->link = nil;
@@ -823,7 +768,7 @@ loop:
 				goto loop;
 			}
 		} /* */
-		q = ctxt->arch->prg();
+		q = emallocz(sizeof(Prog));
 		q->as = AJMP;
 		q->lineno = p->lineno;
 		q->to.type = TYPE_BRANCH;
@@ -888,29 +833,10 @@ LinkArch link386 = {
 
 	.preprocess = preprocess,
 	.assemble = span8,
-	.datasize = datasize,
 	.follow = follow,
-	.iscall = iscall,
-	.isdata = isdata,
-	.prg = prg,
 	.progedit = progedit,
-	.settextflag = settextflag,
-	.textflag = textflag,
 
 	.minlc = 1,
 	.ptrsize = 4,
 	.regsize = 4,
-
-	.ACALL = ACALL,
-	.ADATA = ADATA,
-	.AEND = AEND,
-	.AFUNCDATA = AFUNCDATA,
-	.AGLOBL = AGLOBL,
-	.AJMP = AJMP,
-	.ANOP = ANOP,
-	.APCDATA = APCDATA,
-	.ARET = ARET,
-	.ATEXT = ATEXT,
-	.ATYPE = ATYPE,
-	.AUSEFIELD = AUSEFIELD,
 };

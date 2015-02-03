@@ -200,9 +200,9 @@ ggloblnod(Node *nam)
 	p->to.type = TYPE_CONST;
 	p->to.offset = nam->type->width;
 	if(nam->readonly)
-		p->from.scale = RODATA;
+		p->from3.offset = RODATA;
 	if(nam->type != T && !haspointers(nam->type))
-		p->from.scale |= NOPTR;
+		p->from3.offset |= NOPTR;
 }
 
 void
@@ -218,7 +218,7 @@ ggloblsym(Sym *s, int32 width, int8 flags)
 	p->to.type = TYPE_CONST;
 	p->to.index = REG_NONE;
 	p->to.offset = width;
-	p->from.scale = flags;
+	p->from3.offset = flags;
 }
 
 void
@@ -271,7 +271,7 @@ optoas(int op, Type *t)
 	if(t == T)
 		fatal("optoas: t is nil");
 
-	a = AGOK;
+	a = AXXX;
 	switch(CASE(op, simtype[t->etype])) {
 	default:
 		fatal("optoas: no entry %O-%T", op, t);
@@ -690,7 +690,7 @@ foptoas(int op, Type *t, int flg)
 {
 	int et, a;
 
-	a = AGOK;
+	a = AXXX;
 	et = simtype[t->etype];
 
 	if(use_sse)

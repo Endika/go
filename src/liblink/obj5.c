@@ -35,41 +35,6 @@
 #include "../cmd/5l/5.out.h"
 #include "../runtime/stack.h"
 
-static Prog zprg5 = {
-	.as = AGOK,
-	.scond = C_SCOND_NONE,
-};
-
-static int
-isdata(Prog *p)
-{
-	return p->as == ADATA || p->as == AGLOBL;
-}
-
-static int
-iscall(Prog *p)
-{
-	return p->as == ABL;
-}
-
-static int
-datasize(Prog *p)
-{
-	return p->reg;
-}
-
-static int
-textflag(Prog *p)
-{
-	return p->reg;
-}
-
-static void
-settextflag(Prog *p, int f)
-{
-	p->reg = f;
-}
-
 static void
 progedit(Link *ctxt, Prog *p)
 {
@@ -193,16 +158,6 @@ progedit(Link *ctxt, Prog *p)
 	}
 }
 
-static Prog*
-prg(void)
-{
-	Prog *p;
-
-	p = emallocz(sizeof(*p));
-	*p = zprg5;
-	return p;
-}
-
 static	Prog*	stacksplit(Link*, Prog*, int32, int);
 static	void		initdiv(Link*);
 static	void	softfloat(Link*, LSym*);
@@ -268,7 +223,7 @@ preprocess(Link *ctxt, LSym *cursym)
 	cursym->args = p->to.u.argsize;
 
 	if(ctxt->debugzerostack) {
-		if(autoffset && !(p->reg&NOSPLIT)) {
+		if(autoffset && !(p->from3.offset&NOSPLIT)) {
 			// MOVW $4(R13), R1
 			p = appendp(ctxt, p);
 			p->as = AMOVW;
@@ -421,8 +376,8 @@ preprocess(Link *ctxt, LSym *cursym)
 					break;
 			}
 
-			if(!(p->reg & NOSPLIT))
-				p = stacksplit(ctxt, p, autosize, !(cursym->text->reg&NEEDCTXT)); // emit split check
+			if(!(p->from3.offset & NOSPLIT))
+				p = stacksplit(ctxt, p, autosize, !(cursym->text->from3.offset&NEEDCTXT)); // emit split check
 			
 			// MOVW.W		R14,$-autosize(SP)
 			p = appendp(ctxt, p);
@@ -435,7 +390,7 @@ preprocess(Link *ctxt, LSym *cursym)
 			p->to.reg = REGSP;
 			p->spadj = autosize;
 			
-			if(cursym->text->reg & WRAPPER) {
+			if(cursym->text->from3.offset & WRAPPER) {
 				// if(g->panic != nil && g->panic->argp == FP) g->panic->argp = bottom-of-frame
 				//
 				//	MOVW g_panic(g), R1
@@ -527,7 +482,7 @@ preprocess(Link *ctxt, LSym *cursym)
 			if(cursym->text->mark & LEAF) {
 				if(!autosize) {
 					p->as = AB;
-					p->from = zprg5.from;
+					p->from = zprog.from;
 					if(p->to.sym) { // retjmp
 						p->to.type = TYPE_BRANCH;
 					} else {
@@ -743,11 +698,11 @@ softfloat(Link *ctxt, LSym *cursym)
 
 	soft:
 		if (!wasfloat || (p->mark&LABEL)) {
-			next = ctxt->arch->prg();
+			next = emallocz(sizeof(Prog));
 			*next = *p;
 
 			// BL _sfloat(SB)
-			*p = zprg5;
+			*p = zprog;
 			p->link = next;
 			p->as = ABL;
  				p->to.type = TYPE_BRANCH;
@@ -901,7 +856,7 @@ follow(Link *ctxt, LSym *s)
 
 	ctxt->cursym = s;
 
-	firstp = ctxt->arch->prg();
+	firstp = emallocz(sizeof(Prog));
 	lastp = firstp;
 	xfol(ctxt, s->text, &lastp);
 	lastp->link = nil;
@@ -969,7 +924,7 @@ loop:
 				continue;
 		copy:
 			for(;;) {
-				r = ctxt->arch->prg();
+				r = emallocz(sizeof(Prog));
 				*r = *p;
 				if(!(r->mark&FOLL))
 					print("can't happen 1\n");
@@ -997,7 +952,7 @@ loop:
 			}
 		}
 		a = AB;
-		q = ctxt->arch->prg();
+		q = emallocz(sizeof(Prog));
 		q->as = a;
 		q->lineno = p->lineno;
 		q->to.type = TYPE_BRANCH;
@@ -1042,29 +997,10 @@ LinkArch linkarm = {
 
 	.preprocess = preprocess,
 	.assemble = span5,
-	.datasize = datasize,
 	.follow = follow,
-	.iscall = iscall,
-	.isdata = isdata,
-	.prg = prg,
 	.progedit = progedit,
-	.settextflag = settextflag,
-	.textflag = textflag,
 
 	.minlc = 4,
 	.ptrsize = 4,
 	.regsize = 4,
-
-	.ACALL = ABL,
-	.ADATA = ADATA,
-	.AEND = AEND,
-	.AFUNCDATA = AFUNCDATA,
-	.AGLOBL = AGLOBL,
-	.AJMP = AB,
-	.ANOP = ANOP,
-	.APCDATA = APCDATA,
-	.ARET = ARET,
-	.ATEXT = ATEXT,
-	.ATYPE = ATYPE,
-	.AUSEFIELD = AUSEFIELD,
 };

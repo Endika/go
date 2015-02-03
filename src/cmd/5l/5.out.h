@@ -149,6 +149,7 @@ enum
 	C_HREG,
 
 	C_ADDR,		/* reference to relocatable address */
+	C_TEXTSIZE,
 
 	C_GOK,
 
@@ -157,9 +158,7 @@ enum
 
 enum
 {
-	AXXX,
-
-	AAND,
+	AAND = A_ARCHSPECIFIC,
 	AEOR,
 	ASUB,
 	ARSB,
@@ -175,9 +174,6 @@ enum
 	ABIC,
 
 	AMVN,
-
-	AB,
-	ABL,
 
 /*
  * Do not reorder or fragment the conditional branch
@@ -245,25 +241,14 @@ enum
 	ASWPBU,
 	ASWPW,
 
-	ANOP,
 	ARFE,
 	ASWI,
 	AMULA,
 
-	ADATA,
-	AGLOBL,
-	AGOK,
-	AHISTORY,
-	ANAME,
-	ARET,
-	ATEXT,
 	AWORD,
-	ADYNT_,
-	AINIT_,
 	ABCASE,
 	ACASE,
 
-	AEND,
 
 	AMULL,
 	AMULAL,
@@ -274,7 +259,6 @@ enum
 	ABXRET,
 	ADWORD,
 
-	ASIGNAME,
 
 	ALDREX,
 	ASTREX,
@@ -284,7 +268,6 @@ enum
 
 	APLD,
 
-	AUNDEF,
 
 	ACLZ,
 
@@ -293,21 +276,16 @@ enum
 	AMULAWT,
 	AMULAWB,
 	
-	AUSEFIELD,
-	ATYPE,
-	AFUNCDATA,
-	APCDATA,
-	ACHECKNIL,
-	AVARDEF,
-	AVARKILL,
-	ADUFFCOPY,
-	ADUFFZERO,
 	ADATABUNDLE,
 	ADATABUNDLEEND,
 
 	AMRC, // MRC/MCR
 
 	ALAST,
+	
+	// aliases
+	AB = AJMP,
+	ABL = ACALL,
 };
 
 /* scond byte */
@@ -320,22 +298,27 @@ enum
 	C_FBIT = 1<<7,	/* psr flags-only */
 	C_UBIT = 1<<7,	/* up bit, unsigned bit */
 
-	C_SCOND_EQ = 0,
-	C_SCOND_NE = 1,
-	C_SCOND_HS = 2,
-	C_SCOND_LO = 3,
-	C_SCOND_MI = 4,
-	C_SCOND_PL = 5,
-	C_SCOND_VS = 6,
-	C_SCOND_VC = 7,
-	C_SCOND_HI = 8,
-	C_SCOND_LS = 9,
-	C_SCOND_GE = 10,
-	C_SCOND_LT = 11,
-	C_SCOND_GT = 12,
-	C_SCOND_LE = 13,
-	C_SCOND_NONE = 14,
-	C_SCOND_NV = 15,
+	// These constants are the ARM condition codes encodings,
+	// XORed with 14 so that C_SCOND_NONE has value 0,
+	// so that a zeroed Prog.scond means "always execute".
+	C_SCOND_XOR = 14,
+
+	C_SCOND_EQ = 0 ^ C_SCOND_XOR,
+	C_SCOND_NE = 1 ^ C_SCOND_XOR,
+	C_SCOND_HS = 2 ^ C_SCOND_XOR,
+	C_SCOND_LO = 3 ^ C_SCOND_XOR,
+	C_SCOND_MI = 4 ^ C_SCOND_XOR,
+	C_SCOND_PL = 5 ^ C_SCOND_XOR,
+	C_SCOND_VS = 6 ^ C_SCOND_XOR,
+	C_SCOND_VC = 7 ^ C_SCOND_XOR,
+	C_SCOND_HI = 8 ^ C_SCOND_XOR,
+	C_SCOND_LS = 9 ^ C_SCOND_XOR,
+	C_SCOND_GE = 10 ^ C_SCOND_XOR,
+	C_SCOND_LT = 11 ^ C_SCOND_XOR,
+	C_SCOND_GT = 12 ^ C_SCOND_XOR,
+	C_SCOND_LE = 13 ^ C_SCOND_XOR,
+	C_SCOND_NONE = 14 ^ C_SCOND_XOR,
+	C_SCOND_NV = 15 ^ C_SCOND_XOR,
 
 	/* D_SHIFT type */
 	SHIFT_LL = 0<<5,

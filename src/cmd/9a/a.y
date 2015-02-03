@@ -50,7 +50,7 @@
 %left	'*' '/' '%'
 %token	<lval>	LMOVW LMOVB LABS LLOGW LSHW LADDW LCMP LCROP
 %token	<lval>	LBRA LFMOV LFCONV LFCMP LFADD LFMA LTRAP LXORW
-%token	<lval>	LNOP LEND LRETT LWORD LTEXT LDATA LRETRN
+%token	<lval>	LNOP LEND LRETT LWORD LTEXT LGLOBL LDATA LRETRN
 %token	<lval>	LCONST LSP LSB LFP LPC LCREG LFLUSH
 %token	<lval>	LREG LFREG LR LCR LF LFPSCR
 %token	<lval>	LLR LCTR LSPR LSPREG LSEG LMSR
@@ -60,7 +60,7 @@
 %token	<sval>	LSCONST
 %token	<sym>	LNAME LLAB LVAR
 %type	<lval>	con expr pointer offset sreg
-%type	<addr>	addr rreg regaddr name creg freg xlreg lr ctr
+%type	<addr>	addr rreg regaddr name creg freg xlreg lr ctr textsize
 %type	<addr>	imm ximm fimm rel psr lcr cbit fpscr msr mask
 %%
 prog:
@@ -611,41 +611,66 @@ inst:
 		outcode($1, &nullgen, 0, &nullgen);
 	}
 /*
- * TEXT/GLOBL
+ * TEXT
  */
-|	LTEXT name ',' imm
+|	LTEXT name ',' '$' textsize
+	{
+		settext($2.sym);
+		outcode($1, &$2, 0, &$5);
+	}
+|	LTEXT name ',' con ',' '$' textsize
+	{
+		settext($2.sym);
+		outcode($1, &$2, 0, &$7);
+		if(pass > 1) {
+			lastpc->from3.type = TYPE_CONST;
+			lastpc->from3.offset = $4;
+		}
+	}
+/*
+ * GLOBL
+ */
+|	LGLOBL name ',' imm
 	{
 		settext($2.sym);
 		outcode($1, &$2, 0, &$4);
 	}
-|	LTEXT name ',' con ',' imm
+|	LGLOBL name ',' con ',' imm
 	{
 		settext($2.sym);
-		$6.offset &= 0xffffffffull;
-		$6.offset |= (vlong)ArgsSizeUnknown << 32;
-		outcode($1, &$2, $4, &$6);
+		outcode($1, &$2, 0, &$6);
+		if(pass > 1) {
+			lastpc->from3.type = TYPE_CONST;
+			lastpc->from3.offset = $4;
+		}
 	}
-|	LTEXT name ',' con ',' imm '-' con
-	{
-		settext($2.sym);
-		$6.offset &= 0xffffffffull;
-		$6.offset |= ($8 & 0xffffffffull) << 32;
-		outcode($1, &$2, $4, &$6);
-	}
+
 /*
  * DATA
  */
 |	LDATA name '/' con ',' imm
 	{
-		outcode($1, &$2, $4, &$6);
+		outcode($1, &$2, 0, &$6);
+		if(pass > 1) {
+			lastpc->from3.type = TYPE_CONST;
+			lastpc->from3.offset = $4;
+		}
 	}
 |	LDATA name '/' con ',' ximm
 	{
-		outcode($1, &$2, $4, &$6);
+		outcode($1, &$2, 0, &$6);
+		if(pass > 1) {
+			lastpc->from3.type = TYPE_CONST;
+			lastpc->from3.offset = $4;
+		}
 	}
 |	LDATA name '/' con ',' fimm
 	{
-		outcode($1, &$2, $4, &$6);
+		outcode($1, &$2, 0, &$6);
+		if(pass > 1) {
+			lastpc->from3.type = TYPE_CONST;
+			lastpc->from3.offset = $4;
+		}
 	}
 /*
  * RETURN
@@ -796,6 +821,32 @@ mask:
 		else
 			v = ~(((uint32)~0L>>(me+1)) & (~0L<<(31-(mb-1))));
 		$$.offset = v;
+	}
+
+textsize:
+	LCONST
+	{
+		$$.type = TYPE_TEXTSIZE;
+		$$.offset = $1;
+		$$.u.argsize = ArgsSizeUnknown;
+	}
+|	'-' LCONST
+	{
+		$$.type = TYPE_TEXTSIZE;
+		$$.offset = -$2;
+		$$.u.argsize = ArgsSizeUnknown;
+	}
+|	LCONST '-' LCONST
+	{
+		$$.type = TYPE_TEXTSIZE;
+		$$.offset = $1;
+		$$.u.argsize = $3;
+	}
+|	'-' LCONST '-' LCONST
+	{
+		$$.type = TYPE_TEXTSIZE;
+		$$.offset = -$2;
+		$$.u.argsize = $4;
 	}
 
 ximm:

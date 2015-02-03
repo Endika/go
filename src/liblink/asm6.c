@@ -113,6 +113,7 @@ enum
 	Ymr, Ymm,
 	Yxr, Yxm,
 	Ytls,
+	Ytextsize,
 	Ymax,
 
 	Zxxx		= 0,
@@ -197,7 +198,7 @@ static uchar	ynone[] =
 };
 static uchar	ytext[] =
 {
-	Ymb,	Yi64,	Zpseudo,1,
+	Ymb,	Ytextsize,	Zpseudo,1,
 	0
 };
 static uchar	ynop[] =
@@ -989,8 +990,6 @@ static Optab optab[] =
 	{ AFXRSTOR64,	ysvrs,	Pw, {0x0f,0xae,(01),0x0f,0xae,(01)} },
 	{ AFXSAVE64,	ysvrs,	Pw, {0x0f,0xae,(00),0x0f,0xae,(00)} },
 	{ AGLOBL },
-	{ AGOK },
-	{ AHISTORY },
 	{ AHLT,		ynone,	Px, {0xf4} },
 	{ AIDIVB,	ydivb,	Pb, {0xf6,(07)} },
 	{ AIDIVL,	ydivl,	Px, {0xf7,(07)} },
@@ -1115,7 +1114,6 @@ static Optab optab[] =
 	{ AMULSD,	yxm,	Pf2, {0x59} },
 	{ AMULSS,	yxm,	Pf3, {0x59} },
 	{ AMULW,	ydivl,	Pe, {0xf7,(04)} },
-	{ ANAME },
 	{ ANEGB,	yscond,	Pb, {0xf6,(03)} },
 	{ ANEGL,	yscond,	Px, {0xf7,(03)} },
 	{ ANEGQ,	yscond,	Pw, {0xf7,(03)} },
@@ -1614,14 +1612,9 @@ span6(Link *ctxt, LSym *s)
 		instinit();
 	
 	for(p = ctxt->cursym->text; p != nil; p = p->link) {
-		n = 0;
 		if(p->to.type == TYPE_BRANCH)
 			if(p->pcond == nil)
 				p->pcond = p;
-		if((q = p->pcond) != nil)
-			if(q->back != 2)
-				n = 1;
-		p->back = n;
 		if(p->as == AADJSP) {
 			p->to.type = TYPE_REG;
 			p->to.reg = REG_SP;
@@ -1998,6 +1991,9 @@ oclass(Link *ctxt, Addr *a)
 		if((v>>32) == 0)
 			return Yi32;	/* unsigned */
 		return Yi64;
+
+	case TYPE_TEXTSIZE:
+		return Ytextsize;
 	}
 	
 	if(a->type != TYPE_REG) {

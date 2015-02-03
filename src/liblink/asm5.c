@@ -71,8 +71,7 @@ static Optab	optab[] =
 {
 	/* struct Optab:
 	  OPCODE,	from, prog->reg, to,		 type,size,param,flag */
-	{ ATEXT,	C_ADDR,	C_NONE,	C_LCON, 	 0, 0, 0 },
-	{ ATEXT,	C_ADDR,	C_REG,	C_LCON, 	 0, 0, 0 },
+	{ ATEXT,	C_ADDR,	C_NONE,	C_TEXTSIZE, 	 0, 0, 0 },
 
 	{ AADD,		C_REG,	C_REG,	C_REG,		 1, 4, 0 },
 	{ AADD,		C_REG,	C_NONE,	C_REG,		 1, 4, 0 },
@@ -352,11 +351,6 @@ static uint32	opbra(Link*, int, int);
 static	Oprang	oprange[ALAST];
 static	uchar	xcmp[C_GOK+1][C_GOK+1];
 
-static Prog zprg = {
-	.as = AGOK,
-	.scond = C_SCOND_NONE,
-};
-
 static LSym *deferreturn;
 
 static void
@@ -387,6 +381,11 @@ casesz(Link *ctxt, Prog *p)
 }
 
 static void buildop(Link*);
+
+// Note about encoding: Prog.scond holds the condition encoding,
+// but XOR'ed with C_SCOND_XOR, so that C_SCOND_NONE == 0.
+// The code that shifts the value << 28 has the responsibility
+// for XORing with C_SCOND_XOR too.
 
 // asmoutnacl assembles the instruction p. It replaces asmout for NaCl.
 // It returns the total number of bytes put in out, and it can change
@@ -439,11 +438,11 @@ asmoutnacl(Link *ctxt, int32 origPC, Prog *p, Optab *o, uint32 *out)
 			if((p->pc&15) == 12)
 				p->pc += 4;
 			if(out != nil) {
-				out[0] = ((p->scond&C_SCOND)<<28) | 0x03c0013f | ((p->to.reg&15) << 12) | ((p->to.reg&15) << 16); // BIC $0xc000000f, Rx
+				out[0] = (((p->scond&C_SCOND) ^ C_SCOND_XOR)<<28) | 0x03c0013f | ((p->to.reg&15) << 12) | ((p->to.reg&15) << 16); // BIC $0xc000000f, Rx
 				if(p->as == AB)
-					out[1] = ((p->scond&C_SCOND)<<28) | 0x012fff10 | (p->to.reg&15)<<0; // BX Rx
+					out[1] = (((p->scond&C_SCOND) ^ C_SCOND_XOR)<<28) | 0x012fff10 | (p->to.reg&15)<<0; // BX Rx
 				else // ABL
-					out[1] = ((p->scond&C_SCOND)<<28) | 0x012fff30 | (p->to.reg&15)<<0; // BLX Rx
+					out[1] = (((p->scond&C_SCOND) ^ C_SCOND_XOR)<<28) | 0x012fff30 | (p->to.reg&15)<<0; // BLX Rx
 			}
 			size = 8;
 		}
@@ -479,8 +478,8 @@ asmoutnacl(Link *ctxt, int32 origPC, Prog *p, Optab *o, uint32 *out)
 					// Note: 5c and 5g reg.c know that DIV/MOD smashes R12
 					// so that this return instruction expansion is valid.
 					out[0] = out[0] & ~0x3000; // change PC to R12
-					out[1] = ((p->scond&C_SCOND)<<28) | 0x03ccc13f; // BIC $0xc000000f, R12
-					out[2] = ((p->scond&C_SCOND)<<28) | 0x012fff1c; // BX R12
+					out[1] = (((p->scond&C_SCOND) ^ C_SCOND_XOR)<<28) | 0x03ccc13f; // BIC $0xc000000f, R12
+					out[2] = (((p->scond&C_SCOND) ^ C_SCOND_XOR)<<28) | 0x012fff1c; // BX R12
 				}
 				size += 8;
 				if(((p->pc+size) & 15) == 4)
@@ -491,9 +490,9 @@ asmoutnacl(Link *ctxt, int32 origPC, Prog *p, Optab *o, uint32 *out)
 				// offset to update R13, so we need to additionally mask R13.
 				if(out != nil) {
 					out[size/4-1] &= ~0x3000; // change PC to R12
-					out[size/4] = ((p->scond&C_SCOND)<<28) | 0x03cdd103; // BIC $0xc0000000, R13
-					out[size/4+1] = ((p->scond&C_SCOND)<<28) | 0x03ccc13f; // BIC $0xc000000f, R12
-					out[size/4+2] = ((p->scond&C_SCOND)<<28) | 0x012fff1c; // BX R12
+					out[size/4] = (((p->scond&C_SCOND) ^ C_SCOND_XOR)<<28) | 0x03cdd103; // BIC $0xc0000000, R13
+					out[size/4+1] = (((p->scond&C_SCOND) ^ C_SCOND_XOR)<<28) | 0x03ccc13f; // BIC $0xc000000f, R12
+					out[size/4+2] = (((p->scond&C_SCOND) ^ C_SCOND_XOR)<<28) | 0x012fff1c; // BX R12
 				}
 				// p->pc+size is only ok at 4 or 12 mod 16.
 				if((p->pc+size)%8 == 0)
@@ -511,7 +510,7 @@ asmoutnacl(Link *ctxt, int32 origPC, Prog *p, Optab *o, uint32 *out)
 			// split it into two instructions:
 			// 	ADD $-100004, R13
 			// 	MOVW R14, 0(R13)
-			q = ctxt->arch->prg();
+			q = emallocz(sizeof(Prog));
 			p->scond &= ~C_WBIT;
 			*q = *p;
 			a = &p->to;
@@ -530,12 +529,12 @@ asmoutnacl(Link *ctxt, int32 origPC, Prog *p, Optab *o, uint32 *out)
 			p->from = *a;
 			p->from.reg = 0;
 			p->from.type = TYPE_CONST;
-			p->to = zprg.to;
+			p->to = zprog.to;
 			p->to.type = TYPE_REG;
 			p->to.reg = REG_R13;
 			// make q into p but load/store from 0(R13)
 			q->spadj = 0;
-			*a2 = zprg.from;
+			*a2 = zprog.from;
 			a2->type = TYPE_MEM;
 			a2->reg = REG_R13;
 			a2->sym = nil;
@@ -558,7 +557,7 @@ asmoutnacl(Link *ctxt, int32 origPC, Prog *p, Optab *o, uint32 *out)
 						asmout(ctxt, p, o, out);
 				} else {
 					if(out != nil)
-						out[0] = ((p->scond&C_SCOND)<<28) | 0x03c00103 | ((reg&15) << 16) | ((reg&15) << 12); // BIC $0xc0000000, Rx
+						out[0] = (((p->scond&C_SCOND) ^ C_SCOND_XOR)<<28) | 0x03c00103 | ((reg&15) << 16) | ((reg&15) << 12); // BIC $0xc0000000, Rx
 					if((p->pc&15) == 12)
 						p->pc += 4;
 					size += 4;
@@ -574,7 +573,7 @@ asmoutnacl(Link *ctxt, int32 origPC, Prog *p, Optab *o, uint32 *out)
 				// This won't handle .W/.P, so we should reject such code.
 				if(p->scond & (C_PBIT|C_WBIT))
 					ctxt->diag("unsupported instruction (.P/.W): %P", p);
-				q = ctxt->arch->prg();
+				q = emallocz(sizeof(Prog));
 				*q = *p;
 				if(p->to.type == TYPE_MEM)
 					a2 = &q->to;
@@ -590,11 +589,11 @@ asmoutnacl(Link *ctxt, int32 origPC, Prog *p, Optab *o, uint32 *out)
 				p->as = AMOVW;
 				p->from = *a;
 				p->from.type = TYPE_CONST;
-				p->to = zprg.to;
+				p->to = zprog.to;
 				p->to.type = TYPE_REG;
 				p->to.reg = REG_R11;
 				// make q into p but load/store from 0(R11)
-				*a2 = zprg.from;
+				*a2 = zprog.from;
 				a2->type = TYPE_MEM;
 				a2->reg = REG_R11;
 				a2->sym = nil;
@@ -727,14 +726,14 @@ span5(Link *ctxt, LSym *cursym)
 				if(otxt < 0)
 					otxt = -otxt;
 				if(otxt >= (1L<<17) - 10) {
-					q = ctxt->arch->prg();
+					q = emallocz(sizeof(Prog));
 					q->link = p->link;
 					p->link = q;
 					q->as = AB;
 					q->to.type = TYPE_BRANCH;
 					q->pcond = p->pcond;
 					p->pcond = q;
-					q = ctxt->arch->prg();
+					q = emallocz(sizeof(Prog));
 					q->link = p->link;
 					p->link = q;
 					q->as = AB;
@@ -852,7 +851,7 @@ flushpool(Link *ctxt, Prog *p, int skip, int force)
 	if(ctxt->blitrl) {
 		if(skip){
 			if(0 && skip==1)print("note: flush literal pool at %llux: len=%ud ref=%ux\n", p->pc+4, pool.size, pool.start);
-			q = ctxt->arch->prg();
+			q = emallocz(sizeof(Prog));
 			q->as = AB;
 			q->to.type = TYPE_BRANCH;
 			q->pcond = p->link;
@@ -864,7 +863,7 @@ flushpool(Link *ctxt, Prog *p, int skip, int force)
 			return 0;
 		if(ctxt->headtype == Hnacl && pool.size % 16 != 0) {
 			// if pool is not multiple of 16 bytes, add an alignment marker
-			q = ctxt->arch->prg();
+			q = emallocz(sizeof(Prog));
 			q->as = ADATABUNDLEEND;
 			ctxt->elitrl->link = q;
 			ctxt->elitrl = q;
@@ -896,7 +895,7 @@ addpool(Link *ctxt, Prog *p, Addr *a)
 
 	c = aclass(ctxt, a);
 
-	t = zprg;
+	t = zprog;
 	t.as = AWORD;
 
 	switch(c) {
@@ -935,8 +934,8 @@ addpool(Link *ctxt, Prog *p, Addr *a)
 
 	if(ctxt->headtype == Hnacl && pool.size%16 == 0) {
 		// start a new data bundle
-		q = ctxt->arch->prg();
-		*q = zprg;
+		q = emallocz(sizeof(Prog));
+		*q = zprog;
 		q->as = ADATABUNDLE;
 		q->pc = pool.size;
 		pool.size += 4;
@@ -949,7 +948,7 @@ addpool(Link *ctxt, Prog *p, Addr *a)
 		ctxt->elitrl = q;
 	}
 
-	q = ctxt->arch->prg();
+	q = emallocz(sizeof(Prog));
 	*q = t;
 	q->pc = pool.size;
 
@@ -1122,8 +1121,10 @@ aclass(Link *ctxt, Addr *a)
 			return C_SFCON;
 		return C_LFCON;
 
-	case TYPE_CONST:
 	case TYPE_TEXTSIZE:
+		return C_TEXTSIZE;
+
+	case TYPE_CONST:
 		switch(a->name) {
 
 		case TYPE_NONE:
@@ -1788,7 +1789,7 @@ if(0 /*debug['G']*/) print("%ux: %s: arm %d\n", (uint32)(p->pc), p->from.sym->na
 
 	case 35:	/* mov PSR,R */
 		o1 = (2<<23) | (0xf<<16) | (0<<0);
-		o1 |= (p->scond & C_SCOND) << 28;
+		o1 |= ((p->scond & C_SCOND) ^ C_SCOND_XOR) << 28;
 		o1 |= (p->from.reg & 1) << 22;
 		o1 |= (p->to.reg&15) << 12;
 		break;
@@ -1797,7 +1798,7 @@ if(0 /*debug['G']*/) print("%ux: %s: arm %d\n", (uint32)(p->pc), p->from.sym->na
 		o1 = (2<<23) | (0x29f<<12) | (0<<4);
 		if(p->scond & C_FBIT)
 			o1 ^= 0x010 << 12;
-		o1 |= (p->scond & C_SCOND) << 28;
+		o1 |= ((p->scond & C_SCOND) ^ C_SCOND_XOR) << 28;
 		o1 |= (p->to.reg & 1) << 22;
 		o1 |= (p->from.reg&15) << 0;
 		break;
@@ -1807,7 +1808,7 @@ if(0 /*debug['G']*/) print("%ux: %s: arm %d\n", (uint32)(p->pc), p->from.sym->na
 		o1 = (2<<23) | (0x29f<<12) | (0<<4);
 		if(p->scond & C_FBIT)
 			o1 ^= 0x010 << 12;
-		o1 |= (p->scond & C_SCOND) << 28;
+		o1 |= ((p->scond & C_SCOND) ^ C_SCOND_XOR) << 28;
 		o1 |= immrot(ctxt->instoffset);
 		o1 |= (p->to.reg & 1) << 22;
 		o1 |= (p->from.reg&15) << 0;
@@ -1832,7 +1833,7 @@ if(0 /*debug['G']*/) print("%ux: %s: arm %d\n", (uint32)(p->pc), p->from.sym->na
 		}
 		if(ctxt->instoffset != 0)
 			ctxt->diag("offset must be zero in MOVM; %P", p);
-		o1 |= (p->scond & C_SCOND) << 28;
+		o1 |= ((p->scond & C_SCOND) ^ C_SCOND_XOR) << 28;
 		if(p->scond & C_PBIT)
 			o1 |= 1 << 24;
 		if(p->scond & C_UBIT)
@@ -1853,7 +1854,7 @@ if(0 /*debug['G']*/) print("%ux: %s: arm %d\n", (uint32)(p->pc), p->from.sym->na
 		o1 |= (p->from.reg&15) << 16;
 		o1 |= (p->reg&15) << 0;
 		o1 |= (p->to.reg&15) << 12;
-		o1 |= (p->scond & C_SCOND) << 28;
+		o1 |= ((p->scond & C_SCOND) ^ C_SCOND_XOR) << 28;
 		break;
 
 	case 41:	/* rfe -> movm.s.w.u 0(r13),[r15] */
@@ -1913,12 +1914,12 @@ if(0 /*debug['G']*/) print("%ux: %s: arm %d\n", (uint32)(p->pc), p->from.sym->na
 		break;
 
 	case 56:	/* move to FP[CS]R */
-		o1 = ((p->scond & C_SCOND) << 28) | (0xe << 24) | (1<<8) | (1<<4);
+		o1 = (((p->scond & C_SCOND) ^ C_SCOND_XOR) << 28) | (0xe << 24) | (1<<8) | (1<<4);
 		o1 |= (((p->to.reg&1)+1)<<21) | ((p->from.reg&15) << 12);
 		break;
 
 	case 57:	/* move from FP[CS]R */
-		o1 = ((p->scond & C_SCOND) << 28) | (0xe << 24) | (1<<8) | (1<<4);
+		o1 = (((p->scond & C_SCOND) ^ C_SCOND_XOR) << 28) | (0xe << 24) | (1<<8) | (1<<4);
 		o1 |= (((p->from.reg&1)+1)<<21) | ((p->to.reg&15)<<12) | (1<<20);
 		break;
 	case 58:	/* movbu R,R */
@@ -2097,7 +2098,7 @@ if(0 /*debug['G']*/) print("%ux: %s: arm %d\n", (uint32)(p->pc), p->from.sym->na
 			ctxt->diag("non-zero offset in ABX");
 /*
 		o1 = 	oprrr(ctxt, AADD, p->scond) | immrot(0) | ((REGPC&15)<<16) | ((REGLINK&15)<<12);	// mov PC, LR
-		o2 = ((p->scond&C_SCOND)<<28) | (0x12fff<<8) | (1<<4) | ((p->to.reg&15) << 0);		// BX R
+		o2 = (((p->scond&C_SCOND) ^ C_SCOND_XOR)<<28) | (0x12fff<<8) | (1<<4) | ((p->to.reg&15) << 0);		// BX R
 */
 		// p->to.reg may be REGLINK
 		o1 = oprrr(ctxt, AADD, p->scond);
@@ -2105,7 +2106,7 @@ if(0 /*debug['G']*/) print("%ux: %s: arm %d\n", (uint32)(p->pc), p->from.sym->na
 		o1 |= (p->to.reg&15) << 16;
 		o1 |= (REGTMP&15) << 12;
 		o2 = oprrr(ctxt, AADD, p->scond) | immrot(0) | ((REGPC&15)<<16) | ((REGLINK&15)<<12);	// mov PC, LR
-		o3 = ((p->scond&C_SCOND)<<28) | (0x12fff<<8) | (1<<4) | (REGTMP&15);		// BX Rtmp
+		o3 = (((p->scond&C_SCOND) ^ C_SCOND_XOR)<<28) | (0x12fff<<8) | (1<<4) | (REGTMP&15);		// BX Rtmp
 		break;
 	case 76:	/* bx O(R) when returning from fn*/
 		ctxt->diag("ABXRET");
@@ -2117,7 +2118,7 @@ if(0 /*debug['G']*/) print("%ux: %s: arm %d\n", (uint32)(p->pc), p->from.sym->na
 		o1 = (0x19<<20) | (0xf9f);
 		o1 |= (p->from.reg&15) << 16;
 		o1 |= (p->to.reg&15) << 12;
-		o1 |= (p->scond & C_SCOND) << 28;
+		o1 |= ((p->scond & C_SCOND) ^ C_SCOND_XOR) << 28;
 		break;
 	case 78:	/* strex reg,oreg,reg */
 		aclass(ctxt, &p->from);
@@ -2127,7 +2128,7 @@ if(0 /*debug['G']*/) print("%ux: %s: arm %d\n", (uint32)(p->pc), p->from.sym->na
 		o1 |= (p->from.reg&15) << 16;
 		o1 |= (p->reg&15) << 0;
 		o1 |= (p->to.reg&15) << 12;
-		o1 |= (p->scond & C_SCOND) << 28;
+		o1 |= ((p->scond & C_SCOND) ^ C_SCOND_XOR) << 28;
 		break;
 	case 80:	/* fmov zfcon,freg */
 		if(p->as == AMOVD) {
@@ -2141,7 +2142,7 @@ if(0 /*debug['G']*/) print("%ux: %s: arm %d\n", (uint32)(p->pc), p->from.sym->na
 		r = (p->to.reg&15) << 0;
 
 		// movf $1.0, r
-		o1 |= (p->scond & C_SCOND) << 28;
+		o1 |= ((p->scond & C_SCOND) ^ C_SCOND_XOR) << 28;
 		o1 |= (r&15) << 12;
 		o1 |= (v&0xf) << 0;
 		o1 |= (v&0xf0) << 12;
@@ -2153,7 +2154,7 @@ if(0 /*debug['G']*/) print("%ux: %s: arm %d\n", (uint32)(p->pc), p->from.sym->na
 		o1 = 0x0eb00a00;		// VMOV imm 32
 		if(p->as == AMOVD)
 			o1 = 0xeeb00b00;	// VMOV imm 64
-		o1 |= (p->scond & C_SCOND) << 28;
+		o1 |= ((p->scond & C_SCOND) ^ C_SCOND_XOR) << 28;
 		o1 |= (p->to.reg&15) << 12;
 		v = chipfloat5(ctxt, p->from.u.dval);
 		o1 |= (v&0xf) << 0;
@@ -2163,13 +2164,13 @@ if(0 /*debug['G']*/) print("%ux: %s: arm %d\n", (uint32)(p->pc), p->from.sym->na
 		o1 = oprrr(ctxt, p->as, p->scond);
 		o1 |= ((p->reg&15)<<12) | ((p->from.reg&15)<<0);
 		o2 = 0x0ef1fa10;	// VMRS R15
-		o2 |= (p->scond & C_SCOND) << 28;
+		o2 |= ((p->scond & C_SCOND) ^ C_SCOND_XOR) << 28;
 		break;
 	case 83:	/* fcmp freg,, */
 		o1 = oprrr(ctxt, p->as, p->scond);
 		o1 |= ((p->from.reg&15)<<12) | (1<<16);
 		o2 = 0x0ef1fa10;	// VMRS R15
-		o2 |= (p->scond & C_SCOND) << 28;
+		o2 |= ((p->scond & C_SCOND) ^ C_SCOND_XOR) << 28;
 		break;
 	case 84:	/* movfw freg,freg - truncate float-to-fix */
 		o1 = oprrr(ctxt, p->as, p->scond);
@@ -2186,13 +2187,13 @@ if(0 /*debug['G']*/) print("%ux: %s: arm %d\n", (uint32)(p->pc), p->from.sym->na
 		o1 = oprrr(ctxt, p->as, p->scond);
 		o1 |= ((p->from.reg&15)<<0);
 		o1 |= ((FREGTMP&15)<<12);
-		o2 = oprrr(ctxt, AMOVFW+AEND, p->scond);
+		o2 = oprrr(ctxt, AMOVFW+ALAST, p->scond);
 		o2 |= ((FREGTMP&15)<<16);
 		o2 |= ((p->to.reg&15)<<12);
 		break;
 	case 87:	/* movwf reg,freg - fix-to-float */
 		// macro for movw reg,FTMP; movwf FTMP,freg
-		o1 = oprrr(ctxt, AMOVWF+AEND, p->scond);
+		o1 = oprrr(ctxt, AMOVWF+ALAST, p->scond);
 		o1 |= ((p->from.reg&15)<<12);
 		o1 |= ((FREGTMP&15)<<16);
 		o2 = oprrr(ctxt, p->as, p->scond);
@@ -2200,17 +2201,17 @@ if(0 /*debug['G']*/) print("%ux: %s: arm %d\n", (uint32)(p->pc), p->from.sym->na
 		o2 |= ((p->to.reg&15)<<12);
 		break;
 	case 88:	/* movw reg,freg  */
-		o1 = oprrr(ctxt, AMOVWF+AEND, p->scond);
+		o1 = oprrr(ctxt, AMOVWF+ALAST, p->scond);
 		o1 |= ((p->from.reg&15)<<12);
 		o1 |= ((p->to.reg&15)<<16);
 		break;
 	case 89:	/* movw freg,reg  */
-		o1 = oprrr(ctxt, AMOVFW+AEND, p->scond);
+		o1 = oprrr(ctxt, AMOVFW+ALAST, p->scond);
 		o1 |= ((p->from.reg&15)<<16);
 		o1 |= ((p->to.reg&15)<<12);
 		break;
 	case 90:	/* tst reg  */
-		o1 = oprrr(ctxt, ACMP+AEND, p->scond);
+		o1 = oprrr(ctxt, ACMP+ALAST, p->scond);
 		o1 |= (p->from.reg&15)<<16;
 		break;
 	case 91:	/* ldrexd oreg,reg */
@@ -2220,7 +2221,7 @@ if(0 /*debug['G']*/) print("%ux: %s: arm %d\n", (uint32)(p->pc), p->from.sym->na
 		o1 = (0x1b<<20) | (0xf9f);
 		o1 |= (p->from.reg&15) << 16;
 		o1 |= (p->to.reg&15) << 12;
-		o1 |= (p->scond & C_SCOND) << 28;
+		o1 |= ((p->scond & C_SCOND) ^ C_SCOND_XOR) << 28;
 		break;
 	case 92:	/* strexd reg,oreg,reg */
 		aclass(ctxt, &p->from);
@@ -2230,7 +2231,7 @@ if(0 /*debug['G']*/) print("%ux: %s: arm %d\n", (uint32)(p->pc), p->from.sym->na
 		o1 |= (p->from.reg&15) << 16;
 		o1 |= (p->reg&15) << 0;
 		o1 |= (p->to.reg&15) << 12;
-		o1 |= (p->scond & C_SCOND) << 28;
+		o1 |= ((p->scond & C_SCOND) ^ C_SCOND_XOR) << 28;
 		break;
 	case 93:	/* movb/movh/movhu addr,R -> ldrsb/ldrsh/ldrh */
 		o1 = omvl(ctxt, p, &p->from, REGTMP);
@@ -2334,7 +2335,7 @@ oprrr(Link *ctxt, int a, int sc)
 {
 	uint32 o;
 
-	o = (sc & C_SCOND) << 28;
+	o = ((sc & C_SCOND) ^ C_SCOND_XOR) << 28;
 	if(sc & C_SBIT)
 		o |= 1 << 20;
 	if(sc & (C_PBIT|C_WBIT))
@@ -2415,11 +2416,11 @@ oprrr(Link *ctxt, int a, int sc)
 			return o | (0xe<<24) | (0xb<<20) | (8<<16) | (0xa<<8) | (4<<4) |
 				(1<<18) | (1<<8) | (1<<7);	// toint, double, trunc
 
-	case AMOVWF+AEND:	// copy WtoF
+	case AMOVWF+ALAST:	// copy WtoF
 		return o | (0xe<<24) | (0x0<<20) | (0xb<<8) | (1<<4);
-	case AMOVFW+AEND:	// copy FtoW
+	case AMOVFW+ALAST:	// copy FtoW
 		return o | (0xe<<24) | (0x1<<20) | (0xb<<8) | (1<<4);
-	case ACMP+AEND:	// cmp imm
+	case ACMP+ALAST:	// cmp imm
 		return o | (0x3<<24) | (0x5<<20);
 
 	case ACLZ:
@@ -2450,6 +2451,7 @@ opbra(Link *ctxt, int a, int sc)
 	if(sc & (C_SBIT|C_PBIT|C_WBIT))
 		ctxt->diag(".nil/.nil/.W on bra instruction");
 	sc &= C_SCOND;
+	sc ^= C_SCOND_XOR;
 	if(a == ABL || a == ADUFFZERO || a == ADUFFCOPY)
 		return (sc<<28)|(0x5<<25)|(0x1<<24);
 	if(sc != 0xe)
@@ -2485,7 +2487,7 @@ olr(Link *ctxt, int32 v, int b, int r, int sc)
 
 	if(sc & C_SBIT)
 		ctxt->diag(".nil on LDR/STR instruction");
-	o = (sc & C_SCOND) << 28;
+	o = ((sc & C_SCOND) ^ C_SCOND_XOR) << 28;
 	if(!(sc & C_PBIT))
 		o |= 1 << 24;
 	if(!(sc & C_UBIT))
@@ -2514,7 +2516,7 @@ olhr(Link *ctxt, int32 v, int b, int r, int sc)
 
 	if(sc & C_SBIT)
 		ctxt->diag(".nil on LDRH/STRH instruction");
-	o = (sc & C_SCOND) << 28;
+	o = ((sc & C_SCOND) ^ C_SCOND_XOR) << 28;
 	if(!(sc & C_PBIT))
 		o |= 1 << 24;
 	if(sc & C_WBIT)
@@ -2586,7 +2588,7 @@ ofsr(Link *ctxt, int a, int r, int32 v, int b, int sc, Prog *p)
 
 	if(sc & C_SBIT)
 		ctxt->diag(".nil on FLDR/FSTR instruction");
-	o = (sc & C_SCOND) << 28;
+	o = ((sc & C_SCOND) ^ C_SCOND_XOR) << 28;
 	if(!(sc & C_PBIT))
 		o |= 1 << 24;
 	if(sc & C_WBIT)

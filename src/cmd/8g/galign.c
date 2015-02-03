@@ -36,14 +36,6 @@ betypeinit(void)
 	widthint = 4;
 	widthreg = 4;
 
-	zprog.link = P;
-	zprog.as = AGOK;
-	zprog.from.type = TYPE_NONE;
-	zprog.from.index = TYPE_NONE;
-	zprog.from.scale = 0;
-	zprog.to = zprog.from;
-	arch.zprog = zprog;
-
 	listinit8();
 }
 
@@ -54,23 +46,6 @@ main(int argc, char **argv)
 	arch.thestring = thestring;
 	arch.thelinkarch = thelinkarch;
 	arch.typedefs = typedefs;
-	arch.zprog = zprog;
-	arch.ACALL = ACALL;
-	arch.ACHECKNIL = ACHECKNIL;
-	arch.ADATA = ADATA;
-	arch.AFUNCDATA = AFUNCDATA;
-	arch.AGLOBL = AGLOBL;
-	arch.AJMP = AJMP;
-	arch.ANAME = ANAME;
-	arch.ANOP = ANOP;
-	arch.APCDATA = APCDATA;
-	arch.ARET = ARET;
-	arch.ASIGNAME = ASIGNAME;
-	arch.ATEXT = ATEXT;
-	arch.ATYPE = ATYPE;
-	arch.AUNDEF = AUNDEF;
-	arch.AVARDEF = AVARDEF;
-	arch.AVARKILL = AVARKILL;
 	arch.MAXWIDTH = MAXWIDTH;
 	arch.afunclit = afunclit;
 	arch.anyregalloc = anyregalloc;
