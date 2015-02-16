@@ -397,24 +397,28 @@ rel:
 textsize:
 	LCONST
 	{
+		$$ = nullgen;
 		$$.type = TYPE_TEXTSIZE;
 		$$.offset = $1;
 		$$.u.argsize = ArgsSizeUnknown;
 	}
 |	'-' LCONST
 	{
+		$$ = nullgen;
 		$$.type = TYPE_TEXTSIZE;
 		$$.offset = -$2;
 		$$.u.argsize = ArgsSizeUnknown;
 	}
 |	LCONST '-' LCONST
 	{
+		$$ = nullgen;
 		$$.type = TYPE_TEXTSIZE;
 		$$.offset = $1;
 		$$.u.argsize = $3;
 	}
 |	'-' LCONST '-' LCONST
 	{
+		$$ = nullgen;
 		$$.type = TYPE_TEXTSIZE;
 		$$.offset = -$2;
 		$$.u.argsize = $4;
@@ -429,7 +433,7 @@ ximm:	'$' con
 |	'$' oreg
 	{
 		$$ = $2;
-		$$.type = TYPE_CONST;
+		$$.type = TYPE_ADDR;
 	}
 |	'$' LSCONST
 	{
@@ -456,20 +460,32 @@ fcon:
 reglist:
 	spreg
 	{
-		$$ = 1 << $1;
+		if($1 < REG_R0 || $1 > REG_R15)
+			yyerror("invalid register in reglist");
+
+		$$ = 1 << ($1&15);
 	}
 |	spreg '-' spreg
 	{
 		int i;
+
+		if($1 < REG_R0 || $1 > REG_R15)
+			yyerror("invalid register in reglist");
+		if($3 < REG_R0 || $3 > REG_R15)
+			yyerror("invalid register in reglist");
+
 		$$=0;
 		for(i=$1; i<=$3; i++)
-			$$ |= 1<<i;
+			$$ |= 1<<(i&15);
 		for(i=$3; i<=$1; i++)
-			$$ |= 1<<i;
+			$$ |= 1<<(i&15);
 	}
 |	spreg comma reglist
 	{
-		$$ = (1<<$1) | $3;
+		if($1 < REG_R0 || $1 > REG_R15)
+			yyerror("invalid register in reglist");
+
+		$$ = (1<<($1&15)) | $3;
 	}
 
 gen:

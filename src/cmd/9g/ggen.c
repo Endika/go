@@ -7,7 +7,7 @@
 #include <u.h>
 #include <libc.h>
 #include "gg.h"
-#include "opt.h"
+#include "../gc/popt.h"
 
 static Prog *appendpp(Prog *p, int as, int ftype, int freg, vlong foffset, int ttype, int treg, vlong toffset);
 static Prog *zerorange(Prog *p, vlong frame, vlong lo, vlong hi);
@@ -113,51 +113,6 @@ appendpp(Prog *p, int as, int ftype, int freg, vlong foffset, int ttype, int tre
 	return q;
 }
 
-// Sweep the prog list to mark any used nodes.
-void
-markautoused(Prog *p)
-{
-	for (; p; p = p->link) {
-		if (p->as == ATYPE || p->as == AVARDEF || p->as == AVARKILL)
-			continue;
-
-		if (p->from.node)
-			((Node*)(p->from.node))->used = 1;
-
-		if (p->to.node)
-			((Node*)(p->to.node))->used = 1;
-	}
-}
-
-// Fixup instructions after allocauto (formerly compactframe) has moved all autos around.
-void
-fixautoused(Prog *p)
-{
-	Prog **lp;
-
-	for (lp=&p; (p=*lp) != P; ) {
-		if (p->as == ATYPE && p->from.node && p->from.name == NAME_AUTO && !((Node*)(p->from.node))->used) {
-			*lp = p->link;
-			continue;
-		}
-		if ((p->as == AVARDEF || p->as == AVARKILL) && p->to.node && !((Node*)(p->to.node))->used) {
-			// Cannot remove VARDEF instruction, because - unlike TYPE handled above -
-			// VARDEFs are interspersed with other code, and a jump might be using the
-			// VARDEF as a target. Replace with a no-op instead. A later pass will remove
-			// the no-ops.
-			nopout(p);
-			continue;
-		}
-		if (p->from.name == NAME_AUTO && p->from.node)
-			p->from.offset += ((Node*)(p->from.node))->stkdelta;
-
-		if (p->to.name == NAME_AUTO && p->to.node)
-			p->to.offset += ((Node*)(p->to.node))->stkdelta;
-
-		lp = &p->link;
-	}
-}
-
 /*
  * generate: BL reg, f
  * where both reg and f are registers.
@@ -226,7 +181,7 @@ ginscall(Node *f, int proc)
 				gins(AUNDEF, N, N);
 			break;
 		}
-		nodreg(&reg, types[tptr], REGENV);
+		nodreg(&reg, types[tptr], REGCTXT);
 		nodreg(&r1, types[tptr], REG_R3);
 		gmove(f, &reg);
 		reg.op = OINDREG;
@@ -338,7 +293,7 @@ cgen_callinter(Node *n, Node *res, int proc)
 	} else {
 		// go/defer. generate go func value.
 		p = gins(AMOVD, &nodo, &nodr);	// REG = &(32+offset(REG)) -- i.tab->fun[f]
-		p->from.type = TYPE_CONST;
+		p->from.type = TYPE_ADDR;
 	}
 
 	nodr.type = n->left->type;
@@ -482,30 +437,9 @@ cgen_ret(Node *n)
 	p = gins(ARET, N, N);
 	if(n != N && n->op == ORETJMP) {
 		p->to.name = NAME_EXTERN;
-		p->to.type = TYPE_CONST;
+		p->to.type = TYPE_ADDR;
 		p->to.sym = linksym(n->left->sym);
 	}
-}
-
-void
-cgen_asop(Node *n)
-{
-	USED(n);
-	fatal("cgen_asop"); // no longer used
-}
-
-int
-samereg(Node *a, Node *b)
-{
-	if(a == N || b == N)
-		return 0;
-	if(a->op != OREGISTER)
-		return 0;
-	if(b->op != OREGISTER)
-		return 0;
-	if(a->val.u.reg != b->val.u.reg)
-		return 0;
-	return 1;
 }
 
 /*
@@ -923,7 +857,7 @@ clearfat(Node *nl)
 
 		regalloc(&end, types[tptr], N);
 		p = gins(AMOVD, &dst, &end);
-		p->from.type = TYPE_CONST;
+		p->from.type = TYPE_ADDR;
 		p->from.offset = q*8;
 
 		p = gins(AMOVDU, &r0, &dst);

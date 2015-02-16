@@ -157,6 +157,7 @@ Dconv(Fmt *fp)
 		break;
 
 	case TYPE_CONST:
+	case TYPE_ADDR:
 		if(a->reg != 0)
 			sprint(str, "$%M(%R)", a, a->reg);
 		else
@@ -167,7 +168,7 @@ Dconv(Fmt *fp)
 		if(a->u.argsize == ArgsSizeUnknown)
 			sprint(str, "$%lld", a->offset);
 		else
-			sprint(str, "$%lld-%lld", a->offset, a->u.argsize);
+			sprint(str, "$%lld-%d", a->offset, a->u.argsize);
 		break;
 
 	case TYPE_SHIFT:
@@ -227,7 +228,6 @@ RAconv(Fmt *fp)
 	sprint(str, "GOK-reglist");
 	switch(a->type) {
 	case TYPE_CONST:
-	case TYPE_TEXTSIZE:
 		if(a->reg != 0)
 			break;
 		if(a->sym != nil)

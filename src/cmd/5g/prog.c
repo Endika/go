@@ -5,7 +5,7 @@
 #include <u.h>
 #include <libc.h>
 #include "gg.h"
-#include "opt.h"
+#include "../gc/popt.h"
 
 enum
 {
@@ -136,7 +136,7 @@ proginfo(ProgInfo *info, Prog *p)
 	if(info->flags == 0)
 		fatal("unknown instruction %P", p);
 
-	if(p->from.type == TYPE_CONST && p->from.sym != nil && (info->flags & LeftRead)) {
+	if(p->from.type == TYPE_ADDR && p->from.sym != nil && (info->flags & LeftRead)) {
 		info->flags &= ~LeftRead;
 		info->flags |= LeftAddr;
 	}
@@ -148,4 +148,13 @@ proginfo(ProgInfo *info, Prog *p)
 	
 	if(((p->scond & C_SCOND) != C_SCOND_NONE) && (info->flags & RightWrite))
 		info->flags |= RightRead;
+	
+	switch(p->as) {
+	case ADIV:
+	case ADIVU:
+	case AMOD:
+	case AMODU:
+		info->regset |= RtoB(REG_R12);
+		break;
+	}
 }

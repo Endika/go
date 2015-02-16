@@ -31,6 +31,7 @@
 #include <u.h>
 #include <libc.h>
 #include "gg.h"
+#include "../gc/popt.h"
 #include "opt.h"
 
 static int	regzer(Addr *a);
@@ -42,6 +43,7 @@ static int	copyau(Addr*, Addr*);
 static int	copysub(Addr*, Addr*, Addr*, int);
 static int	copysub1(Prog*, Addr*, Addr*, int);
 static int	copyau1(Prog *p, Addr *v);
+static int	copyu(Prog *p, Addr *v, Addr *s);
 
 static uint32	gactive;
 
@@ -53,7 +55,7 @@ peep(Prog *firstp)
 	Prog *p, *p1;
 	int t;
 
-	g = flowstart(firstp, sizeof(Flow));
+	g = flowstart(firstp, 0);
 	if(g == nil)
 		return;
 	gactive = 0;
@@ -185,7 +187,7 @@ loop1:
 			case AXOR:
 			case AOR:
 				/* irregular instructions */
-				if(p1->from.type == TYPE_CONST)
+				if(p1->from.type == TYPE_CONST || p1->from.type == TYPE_ADDR)
 					continue;
 				break;
 			}
@@ -342,7 +344,7 @@ excise(Flow *r)
 static int
 regzer(Addr *a)
 {
-	if(a->type == TYPE_CONST)
+	if(a->type == TYPE_CONST || a->type == TYPE_ADDR)
 		if(a->sym == nil && a->reg == 0)
 			if(a->offset == 0)
 				return 1;
@@ -568,12 +570,12 @@ copy1(Addr *v1, Addr *v2, Flow *r, int f)
 //	4 if v is set in one address and used in another (so addresses
 // 	  can be rewritten independently)
 //	0 otherwise (not touched)
-int
+static int
 copyu(Prog *p, Addr *v, Addr *s)
 {
 	if(p->from3.type != TYPE_NONE)
 		// 9g never generates a from3
-		print("copyu: from3 (%D) not implemented\n", p->from3);
+		print("copyu: from3 (%D) not implemented\n", &p->from3);
 
 	switch(p->as) {
 
@@ -890,7 +892,7 @@ copyau(Addr *a, Addr *v)
 	if(copyas(a, v))
 		return 1;
 	if(v->type == TYPE_REG)
-		if(a->type == TYPE_MEM || (a->type == TYPE_CONST && a->reg != 0))
+		if(a->type == TYPE_MEM || (a->type == TYPE_ADDR && a->reg != 0))
 			if(v->reg == a->reg)
 				return 1;
 	return 0;
