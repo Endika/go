@@ -25,7 +25,7 @@ func (z *Float) SetString(s string) (*Float, bool) {
 	}
 
 	// there should be no unread characters left
-	if _, _, err = r.ReadRune(); err != io.EOF {
+	if _, err = r.ReadByte(); err != io.EOF {
 		return nil, false
 	}
 
@@ -35,8 +35,10 @@ func (z *Float) SetString(s string) (*Float, bool) {
 // Scan scans the number corresponding to the longest possible prefix
 // of r representing a floating-point number with a mantissa in the
 // given conversion base (the exponent is always a decimal number).
-// It returns the corresponding Float f, the actual base b, and an
-// error err, if any. The number must be of the form:
+// It sets z to the (possibly rounded) value of the corresponding
+// floating-point number, and returns z, the actual base b, and an
+// error err, if any. If z's precision is 0, it is changed to 64
+// before rounding takes effect. The number must be of the form:
 //
 //	number   = [ sign ] [ prefix ] mantissa [ exponent ] .
 //	sign     = "+" | "-" .
@@ -50,16 +52,23 @@ func (z *Float) SetString(s string) (*Float, bool) {
 // argument will lead to a run-time panic.
 //
 // For base 0, the number prefix determines the actual base: A prefix of
-// ``0x'' or ``0X'' selects base 16, and a ``0b'' or ``0B'' prefix selects
+// "0x" or "0X" selects base 16, and a "0b" or "0B" prefix selects
 // base 2; otherwise, the actual base is 10 and no prefix is accepted.
-// The octal prefix ``0'' is not supported.
+// The octal prefix "0" is not supported (a leading "0" is simply
+// considered a "0").
 //
-// A "p" exponent indicates power of 2 for the exponent; for instance "1.2p3"
-// with base 0 or 10 corresponds to the value 1.2 * 2**3.
+// A "p" exponent indicates a binary (rather then decimal) exponent;
+// for instance "0x1.fffffffffffffp1023" (using base 0) represents the
+// maximum float64 value. For hexadecimal mantissae, the exponent must
+// be binary, if present (an "e" or "E" exponent indicator cannot be
+// distinguished from a mantissa digit).
 //
-// BUG(gri) This signature conflicts with Scan(s fmt.ScanState, ch rune) error.
-// TODO(gri) What should the default precision be?
+// BUG(gri) The Float.Scan signature conflicts with Scan(s fmt.ScanState, ch rune) error.
 func (z *Float) Scan(r io.ByteScanner, base int) (f *Float, b int, err error) {
+	if z.prec == 0 {
+		z.prec = 64
+	}
+
 	// sign
 	z.neg, err = scanSign(r)
 	if err != nil {
@@ -67,8 +76,8 @@ func (z *Float) Scan(r io.ByteScanner, base int) (f *Float, b int, err error) {
 	}
 
 	// mantissa
-	var ecorr int // decimal exponent correction; valid if <= 0
-	z.mant, b, ecorr, err = z.mant.scan(r, base, true)
+	var fcount int // fractional digit count; valid if <= 0
+	z.mant, b, fcount, err = z.mant.scan(r, base, true)
 	if err != nil {
 		return
 	}
@@ -80,57 +89,91 @@ func (z *Float) Scan(r io.ByteScanner, base int) (f *Float, b int, err error) {
 	if err != nil {
 		return
 	}
+
+	// set result
+	f = z
+
 	// special-case 0
 	if len(z.mant) == 0 {
-		z.exp = 0
-		f = z
+		z.acc = Exact
+		z.form = zero
 		return
 	}
 	// len(z.mant) > 0
 
-	// determine binary (exp2) and decimal (exp) exponent
-	exp2 := int64(len(z.mant)*_W - int(fnorm(z.mant)))
+	z.form = finite
+
+	// The mantissa may have a decimal point (fcount <= 0) and there
+	// may be a nonzero exponent exp. The decimal point amounts to a
+	// division by b**(-fcount). An exponent means multiplication by
+	// ebase**exp. Finally, mantissa normalization (shift left) requires
+	// a correcting multiplication by 2**(-shiftcount). Multiplications
+	// are commutative, so we can apply them in any order as long as there
+	// is no loss of precision. We only have powers of 2 and 10; keep
+	// track via separate exponents exp2 and exp10.
+
+	// normalize mantissa and get initial binary exponent
+	var exp2 = int64(len(z.mant))*_W - fnorm(z.mant)
+
+	// determine binary or decimal exponent contribution of decimal point
+	var exp10 int64
+	if fcount < 0 {
+		// The mantissa has a "decimal" point ddd.dddd; and
+		// -fcount is the number of digits to the right of '.'.
+		// Adjust relevant exponent accodingly.
+		switch b {
+		case 16:
+			fcount *= 4 // hexadecimal digits are 4 bits each
+			fallthrough
+		case 2:
+			exp2 += int64(fcount)
+		default: // b == 10
+			exp10 = int64(fcount)
+		}
+		// we don't need fcount anymore
+	}
+
+	// take actual exponent into account
 	if ebase == 2 {
 		exp2 += exp
-		exp = 0
+	} else { // ebase == 10
+		exp10 += exp
 	}
-	if ecorr < 0 {
-		exp += int64(ecorr)
-	}
+	// we don't need exp anymore
 
+	// apply 2**exp2
 	z.setExp(exp2)
-	if exp == 0 {
-		// no decimal exponent
+
+	if exp10 == 0 {
+		// no decimal exponent to consider
 		z.round(0)
-		f = z
 		return
 	}
-	// exp != 0
+	// exp10 != 0
 
 	// compute decimal exponent power
-	expabs := exp
+	expabs := exp10
 	if expabs < 0 {
 		expabs = -expabs
 	}
-	powTen := new(Float).SetInt(new(Int).SetBits(nat(nil).expNN(natTen, nat(nil).setWord(Word(expabs)), nil)))
+	powTen := nat(nil).expNN(natTen, nat(nil).setUint64(uint64(expabs)), nil)
+	fpowTen := new(Float).SetInt(new(Int).SetBits(powTen))
 
-	// correct result
-	if exp < 0 {
-		z.uquo(z, powTen)
+	// apply 10**exp10
+	// (uquo and umul do the rounding)
+	if exp10 < 0 {
+		z.uquo(z, fpowTen)
 	} else {
-		z.umul(z, powTen)
+		z.umul(z, fpowTen)
 	}
 
-	f = z
 	return
 }
 
 // Parse is like z.Scan(r, base), but instead of reading from an
-// io.ByteScanner, it parses the string s. An error is returned if the
-// string contains invalid or trailing characters not belonging to the
-// number.
-//
-// TODO(gri) define possible errors more precisely
+// io.ByteScanner, it parses the string s. An error is returned if
+// the string contains invalid or trailing bytes not belonging to
+// the number.
 func (z *Float) Parse(s string, base int) (f *Float, b int, err error) {
 	r := strings.NewReader(s)
 
@@ -139,11 +182,10 @@ func (z *Float) Parse(s string, base int) (f *Float, b int, err error) {
 	}
 
 	// entire string must have been consumed
-	var ch byte
-	if ch, err = r.ReadByte(); err != io.EOF {
-		if err == nil {
-			err = fmt.Errorf("expected end of string, found %q", ch)
-		}
+	if ch, err2 := r.ReadByte(); err2 == nil {
+		err = fmt.Errorf("expected end of string, found %q", ch)
+	} else if err2 != io.EOF {
+		err = err2
 	}
 
 	return
@@ -174,7 +216,7 @@ func ParseFloat(s string, base int, prec uint, mode RoundingMode) (f *Float, b i
 //
 // For the binary exponent formats, the mantissa is printed in normalized form:
 //
-//	'b'	decimal integer mantissa using x.Precision() bits, or -0
+//	'b'	decimal integer mantissa using x.Prec() bits, or -0
 //	'p'	hexadecimal fraction with 0.5 <= 0.mantissa < 1.0, or -0
 //
 // The precision prec controls the number of digits (excluding the exponent)
@@ -184,7 +226,7 @@ func ParseFloat(s string, base int, prec uint, mode RoundingMode) (f *Float, b i
 // number of digits necessary such that ParseFloat will return f exactly.
 // The prec value is ignored for the 'b' or 'p' format.
 //
-// BUG(gri) Currently, Format does not accept negative precisions.
+// BUG(gri) Float.Format does not accept negative precisions.
 func (x *Float) Format(format byte, prec int) string {
 	const extra = 10 // TODO(gri) determine a good/better value here
 	return string(x.Append(make([]byte, 0, prec+extra), format, prec))
@@ -196,13 +238,18 @@ func (x *Float) Append(buf []byte, format byte, prec int) []byte {
 	// TODO(gri) factor out handling of sign?
 
 	// Inf
-	if x.IsInf(0) {
+	if x.IsInf() {
 		var ch byte = '+'
 		if x.neg {
 			ch = '-'
 		}
 		buf = append(buf, ch)
 		return append(buf, "Inf"...)
+	}
+
+	// NaN
+	if x.IsNaN() {
+		return append(buf, "NaN"...)
 	}
 
 	// easy formats
@@ -216,7 +263,7 @@ func (x *Float) Append(buf []byte, format byte, prec int) []byte {
 	return x.bigFtoa(buf, format, prec)
 }
 
-// BUG(gri): Currently, String uses x.Format('g', 10) rather than x.Format('g', -1).
+// BUG(gri): Float.String uses x.Format('g', 10) rather than x.Format('g', -1).
 func (x *Float) String() string {
 	return x.Format('g', 10)
 }
@@ -224,22 +271,30 @@ func (x *Float) String() string {
 // bstring appends the string of x in the format ["-"] mantissa "p" exponent
 // with a decimal mantissa and a binary exponent, or ["-"] "0" if x is zero,
 // and returns the extended buffer.
-// The mantissa is normalized such that is uses x.Precision() bits in binary
+// The mantissa is normalized such that is uses x.Prec() bits in binary
 // representation.
 func (x *Float) bstring(buf []byte) []byte {
 	if x.neg {
 		buf = append(buf, '-')
 	}
-	if len(x.mant) == 0 {
+	if x.form == zero {
 		return append(buf, '0')
 	}
-	// x != 0
-	// normalize mantissa
-	m := x.mant
-	t := uint(len(x.mant)*_W) - x.prec // 0 <= t < _W
-	if t > 0 {
-		m = nat(nil).shr(m, t)
+
+	if debugFloat && x.form != finite {
+		panic("non-finite float")
 	}
+	// x != 0
+
+	// adjust mantissa to use exactly x.prec bits
+	m := x.mant
+	switch w := uint32(len(x.mant)) * _W; {
+	case w < x.prec:
+		m = nat(nil).shl(m, uint(x.prec-w))
+	case w > x.prec:
+		m = nat(nil).shr(m, uint(w-x.prec))
+	}
+
 	buf = append(buf, m.decimalString()...)
 	buf = append(buf, 'p')
 	e := int64(x.exp) - int64(x.prec)
@@ -257,11 +312,24 @@ func (x *Float) pstring(buf []byte) []byte {
 	if x.neg {
 		buf = append(buf, '-')
 	}
-	if len(x.mant) == 0 {
+	if x.form == zero {
 		return append(buf, '0')
 	}
+
+	if debugFloat && x.form != finite {
+		panic("non-finite float")
+	}
 	// x != 0
-	// mantissa is stored in normalized form
+
+	// remove trailing 0 words early
+	// (no need to convert to hex 0's and trim later)
+	m := x.mant
+	i := 0
+	for i < len(m) && m[i] == 0 {
+		i++
+	}
+	m = m[i:]
+
 	buf = append(buf, "0x."...)
 	buf = append(buf, strings.TrimRight(x.mant.hexString(), "0")...)
 	buf = append(buf, 'p')

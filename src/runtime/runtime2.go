@@ -14,7 +14,7 @@ const (
 	//
 	// If you add to this list, add to the list
 	// of "okay during garbage collection" status
-	// in mgc0.c too.
+	// in mgcmark.go too.
 	_Gidle            = iota // 0
 	_Grunnable               // 1 runnable and on a run queue
 	_Grunning                // 2
@@ -129,7 +129,7 @@ type gobuf struct {
 }
 
 // Known to compiler.
-// Changes here must also be made in src/cmd/gc/select.c's selecttype.
+// Changes here must also be made in src/cmd/internal/gc/select.go's selecttype.
 type sudog struct {
 	g           *g
 	selectdone  *uint32
@@ -280,6 +280,7 @@ type m struct {
 	waitunlockf   unsafe.Pointer // todo go func(*g, unsafe.pointer) bool
 	waitlock      unsafe.Pointer
 	waittraceev   byte
+	waittraceskip int
 	syscalltick   uint32
 	//#ifdef GOOS_windows
 	thread uintptr // thread handle
@@ -314,7 +315,9 @@ type p struct {
 	syscalltick uint32 // incremented on every system call
 	m           *m     // back-link to associated m (nil if idle)
 	mcache      *mcache
-	deferpool   [5]*_defer // pool of available defer structs of different sizes (see panic.c)
+
+	deferpool    [5][]*_defer // pool of available defer structs of different sizes (see panic.go)
+	deferpoolbuf [5][32]*_defer
 
 	// Cache of goroutine ids, amortizes accesses to runtime·sched.goidgen.
 	goidcache    uint64
@@ -328,6 +331,9 @@ type p struct {
 	// Available G's (status == Gdead)
 	gfree    *g
 	gfreecnt int32
+
+	sudogcache []*sudog
+	sudogbuf   [128]*sudog
 
 	tracebuf *traceBuf
 
@@ -364,6 +370,14 @@ type schedt struct {
 	gflock mutex
 	gfree  *g
 	ngfree int32
+
+	// Central cache of sudog structs.
+	sudoglock  mutex
+	sudogcache *sudog
+
+	// Central pool of available defer structs of different sizes.
+	deferlock mutex
+	deferpool [5]*_defer
 
 	gcwaiting  uint32 // gc is waiting to run
 	stopwait   int32
@@ -406,7 +420,7 @@ const (
 
 // Layout of in-memory per-function information prepared by linker
 // See http://golang.org/s/go12symtab.
-// Keep in sync with linker and with ../../libmach/sym.c
+// Keep in sync with linker
 // and with package debug/gosym and with symtab.go in package runtime.
 type _func struct {
 	entry   uintptr // start pc
@@ -562,12 +576,16 @@ var (
 	goos        *int8
 	ncpu        int32
 	iscgo       bool
-	cpuid_ecx   uint32
-	cpuid_edx   uint32
 	signote     note
 	forcegc     forcegcstate
 	sched       schedt
 	newprocs    int32
+
+	// Information about what cpu features are available.
+	// Set on startup in asm_{x86,amd64}.s.
+	cpuid_ecx         uint32
+	cpuid_edx         uint32
+	lfenceBeforeRdtsc bool
 )
 
 /*

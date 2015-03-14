@@ -35,9 +35,6 @@ if(! test -f run.rc){
 	exit wrongdir
 }
 
-# Generate libc_plan9.h.
-../include/plan9/mklibc.rc > ../include/plan9/libc_plan9.h
-
 # Clean old generated file that will cause problems in the build.
 rm -f ./runtime/runtime_defs.go
 
@@ -69,14 +66,12 @@ if(~ $1 --dist-tool){
 	exit
 }
 
-echo '# Building compilers and Go bootstrap tool for host,' $GOHOSTOS/$GOHOSTARCH^.
 buildall = -a
 if(~ $1 --no-clean)
 	buildall = ()
 ./cmd/dist/dist bootstrap $buildall -v # builds go_bootstrap
 # Delay move of dist tool to now, because bootstrap may clear tool directory.
 mv cmd/dist/dist $GOTOOLDIR/dist
-$GOTOOLDIR/go_bootstrap clean -i std
 echo
 
 # Run only one process at a time on 9vx.
@@ -86,12 +81,12 @@ if(~ $sysname vx32)
 if(! ~ $GOHOSTARCH $GOARCH || ! ~ $GOHOSTOS $GOOS){
 	echo '# Building packages and commands for host,' $GOHOSTOS/$GOHOSTARCH^.
 	GOOS=$GOHOSTOS GOARCH=$GOHOSTARCH \
-		$GOTOOLDIR/go_bootstrap install -gcflags $"GO_GCFLAGS -ldflags $"GO_LDFLAGS -v $pflag std
+		$GOTOOLDIR/go_bootstrap install -gcflags $"GO_GCFLAGS -ldflags $"GO_LDFLAGS -v $pflag std cmd
 	echo
 }
 
 echo '# Building packages and commands for' $GOOS/$GOARCH^.
-$GOTOOLDIR/go_bootstrap install -gcflags $"GO_GCFLAGS -ldflags $"GO_LDFLAGS -v $pflag std
+$GOTOOLDIR/go_bootstrap install -gcflags $"GO_GCFLAGS -ldflags $"GO_LDFLAGS -v $pflag std cmd
 echo
 
 rm -f $GOTOOLDIR/go_bootstrap

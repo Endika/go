@@ -100,7 +100,7 @@ func mcommoninit(mp *m) {
 
 	// g0 stack won't make sense for user (and is not necessary unwindable).
 	if _g_ != _g_.m.g0 {
-		callers(1, &mp.createstack[0], len(mp.createstack))
+		callers(1, mp.createstack[:])
 	}
 
 	mp.fastrand = 0x49f6428a + uint32(mp.id) + uint32(cputicks())
@@ -128,9 +128,9 @@ func mcommoninit(mp *m) {
 }
 
 // Mark gp ready to run.
-func ready(gp *g) {
+func ready(gp *g, traceskip int) {
 	if trace.enabled {
-		traceGoUnpark(gp)
+		traceGoUnpark(gp, traceskip)
 	}
 
 	status := readgstatus(gp)
@@ -447,7 +447,7 @@ func restartg(gp *g) {
 			throw("processing Gscanenqueue on wrong m")
 		}
 		dropg()
-		ready(gp)
+		ready(gp, 0)
 	}
 }
 
@@ -527,6 +527,21 @@ func quiesce(mastergp *g) {
 	// g0 will potentially scan this thread and put mastergp on the runqueue
 	mcall(mquiesce)
 }
+
+// Holding worldsema grants an M the right to try to stop the world.
+// The procedure is:
+//
+//	semacquire(&worldsema);
+//	m.preemptoff = "reason";
+//	stoptheworld();
+//
+//	... do stuff ...
+//
+//	m.preemptoff = "";
+//	semrelease(&worldsema);
+//	starttheworld();
+//
+var worldsema uint32 = 1
 
 // This is used by the GC as well as the routines that do stack dumps. In the case
 // of GC all the routines can be reliably stopped. This is not always the case
@@ -1203,7 +1218,7 @@ top:
 	}
 	if fingwait && fingwake {
 		if gp := wakefing(); gp != nil {
-			ready(gp)
+			ready(gp, 0)
 		}
 	}
 
@@ -1222,14 +1237,22 @@ top:
 		}
 	}
 
-	// poll network - returns list of goroutines
-	if gp := netpoll(false); gp != nil { // non-blocking
-		injectglist(gp.schedlink)
-		casgstatus(gp, _Gwaiting, _Grunnable)
-		if trace.enabled {
-			traceGoUnpark(gp)
+	// Poll network.
+	// This netpoll is only an optimization before we resort to stealing.
+	// We can safely skip it if there a thread blocked in netpoll already.
+	// If there is any kind of logical race with that blocked thread
+	// (e.g. it has already returned from netpoll, but does not set lastpoll yet),
+	// this thread will do blocking netpoll below anyway.
+	if netpollinited() && sched.lastpoll != 0 {
+		if gp := netpoll(false); gp != nil { // non-blocking
+			// netpoll returns list of goroutines linked by schedlink.
+			injectglist(gp.schedlink)
+			casgstatus(gp, _Gwaiting, _Grunnable)
+			if trace.enabled {
+				traceGoUnpark(gp, 0)
+			}
+			return gp
 		}
-		return gp
 	}
 
 	// If number of spinning M's >= number of busy P's, block.
@@ -1313,7 +1336,7 @@ stop:
 				injectglist(gp.schedlink)
 				casgstatus(gp, _Gwaiting, _Grunnable)
 				if trace.enabled {
-					traceGoUnpark(gp)
+					traceGoUnpark(gp, 0)
 				}
 				return gp
 			}
@@ -1353,7 +1376,7 @@ func injectglist(glist *g) {
 	}
 	if trace.enabled {
 		for gp := glist; gp != nil; gp = gp.schedlink {
-			traceGoUnpark(gp)
+			traceGoUnpark(gp, 0)
 		}
 	}
 	lock(&sched.lock)
@@ -1395,7 +1418,7 @@ top:
 		gp = traceReader()
 		if gp != nil {
 			casgstatus(gp, _Gwaiting, _Grunnable)
-			traceGoUnpark(gp)
+			traceGoUnpark(gp, 0)
 			resetspinning()
 		}
 	}
@@ -1449,27 +1472,9 @@ func dropg() {
 	}
 }
 
-// Puts the current goroutine into a waiting state and calls unlockf.
-// If unlockf returns false, the goroutine is resumed.
-func park(unlockf func(*g, unsafe.Pointer) bool, lock unsafe.Pointer, reason string, traceev byte) {
-	_g_ := getg()
-
-	_g_.m.waitlock = lock
-	_g_.m.waitunlockf = *(*unsafe.Pointer)(unsafe.Pointer(&unlockf))
-	_g_.m.waittraceev = traceev
-	_g_.waitreason = reason
-	mcall(park_m)
-}
-
 func parkunlock_c(gp *g, lock unsafe.Pointer) bool {
 	unlock((*mutex)(lock))
 	return true
-}
-
-// Puts the current goroutine into a waiting state and unlocks the lock.
-// The goroutine can be made runnable again by calling ready(gp).
-func parkunlock(lock *mutex, reason string, traceev byte) {
-	park(parkunlock_c, unsafe.Pointer(lock), reason, traceev)
 }
 
 // park continuation on g0.
@@ -1477,7 +1482,7 @@ func park_m(gp *g) {
 	_g_ := getg()
 
 	if trace.enabled {
-		traceGoPark(_g_.m.waittraceev, gp)
+		traceGoPark(_g_.m.waittraceev, _g_.m.waittraceskip, gp)
 	}
 
 	casgstatus(gp, _Grunning, _Gwaiting)
@@ -1490,7 +1495,7 @@ func park_m(gp *g) {
 		_g_.m.waitlock = nil
 		if !ok {
 			if trace.enabled {
-				traceGoUnpark(gp)
+				traceGoUnpark(gp, 2)
 			}
 			casgstatus(gp, _Gwaiting, _Grunnable)
 			execute(gp) // Schedule it back, never returns.
@@ -1530,8 +1535,6 @@ func gopreempt_m(gp *g) {
 }
 
 // Finishes execution of the current goroutine.
-// Must be NOSPLIT because it is called from Go. (TODO - probably not anymore)
-//go:nosplit
 func goexit1() {
 	if raceenabled {
 		racegoend()
@@ -2271,11 +2274,7 @@ func _GC()           { _GC() }
 var etext struct{}
 
 // Called if we receive a SIGPROF signal.
-func sigprof(pc *uint8, sp *uint8, lr *uint8, gp *g, mp *m) {
-	var n int32
-	var traceback bool
-	var stk [100]uintptr
-
+func sigprof(pc, sp, lr uintptr, gp *g, mp *m) {
 	if prof.hz == 0 {
 		return
 	}
@@ -2355,18 +2354,18 @@ func sigprof(pc *uint8, sp *uint8, lr *uint8, gp *g, mp *m) {
 	// To recap, there are no constraints on the assembly being used for the
 	// transition. We simply require that g and SP match and that the PC is not
 	// in gogo.
-	traceback = true
-	usp := uintptr(unsafe.Pointer(sp))
+	traceback := true
 	gogo := funcPC(gogo)
 	if gp == nil || gp != mp.curg ||
-		usp < gp.stack.lo || gp.stack.hi < usp ||
-		(gogo <= uintptr(unsafe.Pointer(pc)) && uintptr(unsafe.Pointer(pc)) < gogo+_RuntimeGogoBytes) {
+		sp < gp.stack.lo || gp.stack.hi < sp ||
+		(gogo <= pc && pc < gogo+_RuntimeGogoBytes) {
 		traceback = false
 	}
 
-	n = 0
+	var stk [maxCPUProfStack]uintptr
+	n := 0
 	if traceback {
-		n = int32(gentraceback(uintptr(unsafe.Pointer(pc)), uintptr(unsafe.Pointer(sp)), uintptr(unsafe.Pointer(lr)), gp, 0, &stk[0], len(stk), nil, nil, _TraceTrap))
+		n = gentraceback(pc, sp, lr, gp, 0, &stk[0], len(stk), nil, nil, _TraceTrap)
 	}
 	if !traceback || n <= 0 {
 		// Normal traceback is impossible or has failed.
@@ -2376,21 +2375,21 @@ func sigprof(pc *uint8, sp *uint8, lr *uint8, gp *g, mp *m) {
 			// Cgo, we can't unwind and symbolize arbitrary C code,
 			// so instead collect Go stack that leads to the cgo call.
 			// This is especially important on windows, since all syscalls are cgo calls.
-			n = int32(gentraceback(mp.curg.syscallpc, mp.curg.syscallsp, 0, mp.curg, 0, &stk[0], len(stk), nil, nil, 0))
+			n = gentraceback(mp.curg.syscallpc, mp.curg.syscallsp, 0, mp.curg, 0, &stk[0], len(stk), nil, nil, 0)
 		}
 		if GOOS == "windows" && n == 0 && mp.libcallg != nil && mp.libcallpc != 0 && mp.libcallsp != 0 {
 			// Libcall, i.e. runtime syscall on windows.
 			// Collect Go stack that leads to the call.
-			n = int32(gentraceback(mp.libcallpc, mp.libcallsp, 0, mp.libcallg, 0, &stk[0], len(stk), nil, nil, 0))
+			n = gentraceback(mp.libcallpc, mp.libcallsp, 0, mp.libcallg, 0, &stk[0], len(stk), nil, nil, 0)
 		}
 		if n == 0 {
 			// If all of the above has failed, account it against abstract "System" or "GC".
 			n = 2
 			// "ExternalCode" is better than "etext".
-			if uintptr(unsafe.Pointer(pc)) > uintptr(unsafe.Pointer(&etext)) {
-				pc = (*uint8)(unsafe.Pointer(uintptr(funcPC(_ExternalCode) + _PCQuantum)))
+			if pc > uintptr(unsafe.Pointer(&etext)) {
+				pc = funcPC(_ExternalCode) + _PCQuantum
 			}
-			stk[0] = uintptr(unsafe.Pointer(pc))
+			stk[0] = pc
 			if mp.preemptoff != "" || mp.helpgc != 0 {
 				stk[1] = funcPC(_GC) + _PCQuantum
 			} else {
@@ -2405,7 +2404,7 @@ func sigprof(pc *uint8, sp *uint8, lr *uint8, gp *g, mp *m) {
 			osyield()
 		}
 		if prof.hz != 0 {
-			cpuproftick(&stk[0], n)
+			cpuprof.add(stk[:n])
 		}
 		atomicstore(&prof.lock, 0)
 	}
@@ -2466,6 +2465,10 @@ func procresize(nprocs int32) *p {
 			pp = new(p)
 			pp.id = i
 			pp.status = _Pgcstop
+			pp.sudogcache = pp.sudogbuf[:0]
+			for i := range pp.deferpool {
+				pp.deferpool[i] = pp.deferpoolbuf[i][:0]
+			}
 			atomicstorep(unsafe.Pointer(&allp[i]), unsafe.Pointer(pp))
 		}
 		if pp.mcache == nil {
@@ -2503,6 +2506,16 @@ func procresize(nprocs int32) *p {
 				sched.runqtail = gp
 			}
 			sched.runqsize++
+		}
+		for i := range p.sudogbuf {
+			p.sudogbuf[i] = nil
+		}
+		p.sudogcache = p.sudogbuf[:0]
+		for i := range p.deferpool {
+			for j := range p.deferpoolbuf[i] {
+				p.deferpoolbuf[i][j] = nil
+			}
+			p.deferpool[i] = p.deferpoolbuf[i][:0]
 		}
 		freemcache(p.mcache)
 		p.mcache = nil
@@ -3316,4 +3329,28 @@ func sync_atomic_runtime_procPin() int {
 //go:nosplit
 func sync_atomic_runtime_procUnpin() {
 	procUnpin()
+}
+
+// Active spinning for sync.Mutex.
+//go:linkname sync_runtime_canSpin sync.runtime_canSpin
+//go:nosplit
+func sync_runtime_canSpin(i int) bool {
+	// sync.Mutex is cooperative, so we are conservative with spinning.
+	// Spin only few times and only if running on a multicore machine and
+	// GOMAXPROCS>1 and there is at least one other running P and local runq is empty.
+	// As opposed to runtime mutex we don't do passive spinning here,
+	// because there can be work on global runq on on other Ps.
+	if i >= active_spin || ncpu <= 1 || gomaxprocs <= int32(sched.npidle+sched.nmspinning)+1 {
+		return false
+	}
+	if p := getg().m.p; p.runqhead != p.runqtail {
+		return false
+	}
+	return true
+}
+
+//go:linkname sync_runtime_doSpin sync.runtime_doSpin
+//go:nosplit
+func sync_runtime_doSpin() {
+	procyield(active_spin_cnt)
 }

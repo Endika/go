@@ -30,6 +30,19 @@ TEXT runtime·rt0_go(SB),NOSPLIT,$0
 	CPUID
 	CMPQ	AX, $0
 	JE	nocpuinfo
+
+	// Figure out how to serialize RDTSC.
+	// On Intel processors LFENCE is enough. AMD requires MFENCE.
+	// Don't know about the rest, so let's do MFENCE.
+	CMPL	BX, $0x756E6547  // "Genu"
+	JNE	notintel
+	CMPL	DX, $0x49656E69  // "ineI"
+	JNE	notintel
+	CMPL	CX, $0x6C65746E  // "ntel"
+	JNE	notintel
+	MOVB	$1, runtime·lfenceBeforeRdtsc(SB)
+notintel:
+
 	MOVQ	$1, AX
 	CPUID
 	MOVL	CX, runtime·cpuid_ecx(SB)
@@ -756,7 +769,7 @@ havem:
 	MOVQ	BX, -8(DI)
 	// Compute the size of the frame, including return PC and, if
 	// GOEXPERIMENT=framepointer, the saved based pointer
-	LEAQ	x+0(FP), AX
+	LEAQ	fv+0(FP), AX
 	SUBQ	SP, AX
 	SUBQ	AX, DI
 	MOVQ	DI, SP
@@ -768,7 +781,7 @@ havem:
 	// Compute the size of the frame again.  FP and SP have
 	// completely different values here than they did above,
 	// but only their difference matters.
-	LEAQ	x+0(FP), AX
+	LEAQ	fv+0(FP), AX
 	SUBQ	SP, AX
 
 	// Restore g->sched (== m->curg->sched) from saved values.
@@ -842,12 +855,6 @@ TEXT runtime·getcallerpc(SB),NOSPLIT,$0-16
 	MOVQ	AX, ret+8(FP)
 	RET
 
-TEXT runtime·gogetcallerpc(SB),NOSPLIT,$0-16
-	MOVQ	p+0(FP),AX		// addr of first arg
-	MOVQ	-8(AX),AX		// get calling pc
-	MOVQ	AX,ret+8(FP)
-	RET
-
 TEXT runtime·setcallerpc(SB),NOSPLIT,$0-16
 	MOVQ	argp+0(FP),AX		// addr of first arg
 	MOVQ	pc+8(FP), BX
@@ -859,14 +866,15 @@ TEXT runtime·getcallersp(SB),NOSPLIT,$0-16
 	MOVQ	AX, ret+8(FP)
 	RET
 
-// func gogetcallersp(p unsafe.Pointer) uintptr
-TEXT runtime·gogetcallersp(SB),NOSPLIT,$0-16
-	MOVQ	p+0(FP),AX		// addr of first arg
-	MOVQ	AX, ret+8(FP)
-	RET
-
-// int64 runtime·cputicks(void)
+// func cputicks() int64
 TEXT runtime·cputicks(SB),NOSPLIT,$0-0
+	CMPB	runtime·lfenceBeforeRdtsc(SB), $1
+	JNE	mfence
+	BYTE	$0x0f; BYTE $0xae; BYTE $0xe8 // LFENCE
+	JMP	done
+mfence:
+	BYTE	$0x0f; BYTE $0xae; BYTE $0xf0 // MFENCE
+done:
 	RDTSC
 	SHLQ	$32, DX
 	ADDQ	DX, AX
@@ -1501,7 +1509,7 @@ allsame:
 	LEAQ	-1(CX)(AX*2), AX	// 1,0,-1 result
 	RET
 
-TEXT bytes·IndexByte(SB),NOSPLIT,$0
+TEXT bytes·IndexByte(SB),NOSPLIT,$0-40
 	MOVQ s+0(FP), SI
 	MOVQ s_len+8(FP), BX
 	MOVB c+24(FP), AL
@@ -1509,7 +1517,7 @@ TEXT bytes·IndexByte(SB),NOSPLIT,$0
 	MOVQ AX, ret+32(FP)
 	RET
 
-TEXT strings·IndexByte(SB),NOSPLIT,$0
+TEXT strings·IndexByte(SB),NOSPLIT,$0-32
 	MOVQ s+0(FP), SI
 	MOVQ s_len+8(FP), BX
 	MOVB c+16(FP), AL
@@ -2449,6 +2457,8 @@ TEXT _cgo_topofstack(SB),NOSPLIT,$0
 TEXT runtime·goexit(SB),NOSPLIT,$0-0
 	BYTE	$0x90	// NOP
 	CALL	runtime·goexit1(SB)	// does not return
+	// traceback from goexit1 must hit code range of goexit
+	BYTE	$0x90	// NOP
 
 TEXT runtime·getg(SB),NOSPLIT,$0-8
 	get_tls(CX)

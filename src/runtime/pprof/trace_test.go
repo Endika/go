@@ -6,11 +6,12 @@ package pprof_test
 
 import (
 	"bytes"
+	"internal/trace"
+	"io"
 	"net"
 	"os"
 	"runtime"
 	. "runtime/pprof"
-	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -66,10 +67,24 @@ func TestTrace(t *testing.T) {
 		t.Fatalf("failed to start tracing: %v", err)
 	}
 	StopTrace()
-	_, err := parseTrace(buf)
+	_, err := trace.Parse(buf)
 	if err != nil {
 		t.Fatalf("failed to parse trace: %v", err)
 	}
+}
+
+func parseTrace(r io.Reader) ([]*trace.Event, map[uint64]*trace.GDesc, error) {
+	events, err := trace.Parse(r)
+	if err != nil {
+		return nil, nil, err
+	}
+	gs := trace.GoroutineStats(events)
+	for goid := range gs {
+		// We don't do any particular checks on the result at the moment.
+		// But still check that RelatedGoroutines does not crash, hang, etc.
+		_ = trace.RelatedGoroutines(events, goid)
+	}
+	return events, gs, nil
 }
 
 func TestTraceStress(t *testing.T) {
@@ -101,7 +116,7 @@ func TestTraceStress(t *testing.T) {
 		<-done
 		wg.Done()
 	}()
-	time.Sleep(time.Millisecond)
+	time.Sleep(time.Millisecond) // give the goroutine above time to block
 
 	buf := new(bytes.Buffer)
 	if err := StartTrace(buf); err != nil {
@@ -109,6 +124,7 @@ func TestTraceStress(t *testing.T) {
 	}
 
 	procs := runtime.GOMAXPROCS(10)
+	time.Sleep(50 * time.Millisecond) // test proc stop/start events
 
 	go func() {
 		runtime.LockOSThread()
@@ -198,47 +214,149 @@ func TestTraceStress(t *testing.T) {
 	runtime.GOMAXPROCS(procs)
 
 	StopTrace()
-	_, err = parseTrace(buf)
+	_, _, err = parseTrace(buf)
 	if err != nil {
 		t.Fatalf("failed to parse trace: %v", err)
 	}
 }
 
-func TestTraceSymbolize(t *testing.T) {
+// Do a bunch of various stuff (timers, GC, network, etc) in a separate goroutine.
+// And concurrently with all that start/stop trace 3 times.
+func TestTraceStressStartStop(t *testing.T) {
 	skipTraceTestsIfNeeded(t)
-	if runtime.GOOS == "nacl" {
-		t.Skip("skipping: nacl tests fail with 'failed to symbolize trace: failed to start addr2line'")
-	}
-	buf := new(bytes.Buffer)
-	if err := StartTrace(buf); err != nil {
-		t.Fatalf("failed to start tracing: %v", err)
-	}
-	runtime.GC()
-	StopTrace()
-	events, err := parseTrace(buf)
-	if err != nil {
-		t.Fatalf("failed to parse trace: %v", err)
-	}
-	err = symbolizeTrace(events, os.Args[0])
-	if err != nil {
-		t.Fatalf("failed to symbolize trace: %v", err)
-	}
-	found := false
-eventLoop:
-	for _, ev := range events {
-		if ev.typ != traceEvGCStart {
-			continue
+
+	defer runtime.GOMAXPROCS(runtime.GOMAXPROCS(8))
+	outerDone := make(chan bool)
+
+	go func() {
+		defer func() {
+			outerDone <- true
+		}()
+
+		var wg sync.WaitGroup
+		done := make(chan bool)
+
+		wg.Add(1)
+		go func() {
+			<-done
+			wg.Done()
+		}()
+
+		rp, wp, err := os.Pipe()
+		if err != nil {
+			t.Fatalf("failed to create pipe: %v", err)
 		}
-		for _, f := range ev.stk {
-			if strings.HasSuffix(f.file, "trace_test.go") &&
-				strings.HasSuffix(f.fn, "pprof_test.TestTraceSymbolize") &&
-				f.line == 216 {
-				found = true
-				break eventLoop
+		defer func() {
+			rp.Close()
+			wp.Close()
+		}()
+		wg.Add(1)
+		go func() {
+			var tmp [1]byte
+			rp.Read(tmp[:])
+			<-done
+			wg.Done()
+		}()
+		time.Sleep(time.Millisecond)
+
+		go func() {
+			runtime.LockOSThread()
+			for {
+				select {
+				case <-done:
+					return
+				default:
+					runtime.Gosched()
+				}
 			}
+		}()
+
+		runtime.GC()
+		// Trigger GC from malloc.
+		for i := 0; i < 1e3; i++ {
+			_ = make([]byte, 1<<20)
+		}
+
+		// Create a bunch of busy goroutines to load all Ps.
+		for p := 0; p < 10; p++ {
+			wg.Add(1)
+			go func() {
+				// Do something useful.
+				tmp := make([]byte, 1<<16)
+				for i := range tmp {
+					tmp[i]++
+				}
+				_ = tmp
+				<-done
+				wg.Done()
+			}()
+		}
+
+		// Block in syscall.
+		wg.Add(1)
+		go func() {
+			var tmp [1]byte
+			rp.Read(tmp[:])
+			<-done
+			wg.Done()
+		}()
+
+		runtime.GOMAXPROCS(runtime.GOMAXPROCS(1))
+
+		// Test timers.
+		timerDone := make(chan bool)
+		go func() {
+			time.Sleep(time.Millisecond)
+			timerDone <- true
+		}()
+		<-timerDone
+
+		// A bit of network.
+		ln, err := net.Listen("tcp", "127.0.0.1:0")
+		if err != nil {
+			t.Fatalf("listen failed: %v", err)
+		}
+		defer ln.Close()
+		go func() {
+			c, err := ln.Accept()
+			if err != nil {
+				return
+			}
+			time.Sleep(time.Millisecond)
+			var buf [1]byte
+			c.Write(buf[:])
+			c.Close()
+		}()
+		c, err := net.Dial("tcp", ln.Addr().String())
+		if err != nil {
+			t.Fatalf("dial failed: %v", err)
+		}
+		var tmp [1]byte
+		c.Read(tmp[:])
+		c.Close()
+
+		go func() {
+			runtime.Gosched()
+			select {}
+		}()
+
+		// Unblock helper goroutines and wait them to finish.
+		wp.Write(tmp[:])
+		wp.Write(tmp[:])
+		close(done)
+		wg.Wait()
+	}()
+
+	for i := 0; i < 3; i++ {
+		buf := new(bytes.Buffer)
+		if err := StartTrace(buf); err != nil {
+			t.Fatalf("failed to start tracing: %v", err)
+		}
+		time.Sleep(time.Millisecond)
+		StopTrace()
+		if _, _, err := parseTrace(buf); err != nil {
+			t.Fatalf("failed to parse trace: %v", err)
 		}
 	}
-	if !found {
-		t.Fatalf("the trace does not contain GC event")
-	}
+	<-outerDone
 }

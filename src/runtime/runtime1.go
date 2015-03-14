@@ -58,13 +58,6 @@ var (
 	iswindows int32
 )
 
-// Information about what cpu features are available.
-// Set on startup in asm_{x86/amd64}.s.
-var (
-//cpuid_ecx uint32
-//cpuid_edx uint32
-)
-
 func goargs() {
 	if GOOS == "windows" {
 		return
@@ -442,7 +435,7 @@ func reflect_typelinks() []*_type {
 	return ret
 }
 
-// TODO: move back into mgc0.c when converted to Go
+// TODO: move back into mgc.go
 func readgogc() int32 {
 	p := gogetenv("GOGC")
 	if p == "" {

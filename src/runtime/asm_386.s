@@ -30,6 +30,19 @@ TEXT runtime·rt0_go(SB),NOSPLIT,$0
 	CPUID
 	CMPL	AX, $0
 	JE	nocpuinfo
+
+	// Figure out how to serialize RDTSC.
+	// On Intel processors LFENCE is enough. AMD requires MFENCE.
+	// Don't know about the rest, so let's do MFENCE.
+	CMPL	BX, $0x756E6547  // "Genu"
+	JNE	notintel
+	CMPL	DX, $0x49656E69  // "ineI"
+	JNE	notintel
+	CMPL	CX, $0x6C65746E  // "ntel"
+	JNE	notintel
+	MOVB	$1, runtime·lfenceBeforeRdtsc(SB)
+notintel:
+
 	MOVL	$1, AX
 	CPUID
 	MOVL	CX, runtime·cpuid_ecx(SB)
@@ -845,12 +858,6 @@ TEXT runtime·getcallerpc(SB),NOSPLIT,$0-8
 	MOVL	AX, ret+4(FP)
 	RET
 
-TEXT runtime·gogetcallerpc(SB),NOSPLIT,$0-8
-	MOVL	p+0(FP),AX		// addr of first arg
-	MOVL	-4(AX),AX		// get calling pc
-	MOVL	AX, ret+4(FP)
-	RET
-
 TEXT runtime·setcallerpc(SB),NOSPLIT,$0-8
 	MOVL	argp+0(FP),AX		// addr of first arg
 	MOVL	pc+4(FP), BX
@@ -862,15 +869,17 @@ TEXT runtime·getcallersp(SB), NOSPLIT, $0-8
 	MOVL	AX, ret+4(FP)
 	RET
 
-// func gogetcallersp(p unsafe.Pointer) uintptr
-TEXT runtime·gogetcallersp(SB),NOSPLIT,$0-8
-	MOVL	p+0(FP),AX		// addr of first arg
-	MOVL	AX, ret+4(FP)
-	RET
-
-// int64 runtime·cputicks(void), so really
-// void runtime·cputicks(int64 *ticks)
+// func cputicks() int64
 TEXT runtime·cputicks(SB),NOSPLIT,$0-8
+	TESTL	$0x4000000, runtime·cpuid_edx(SB) // no sse2, no mfence
+	JEQ	done
+	CMPB	runtime·lfenceBeforeRdtsc(SB), $1
+	JNE	mfence
+	BYTE	$0x0f; BYTE $0xae; BYTE $0xe8 // LFENCE
+	JMP	done
+mfence:
+	BYTE	$0x0f; BYTE $0xae; BYTE $0xf0 // MFENCE
+done:
 	RDTSC
 	MOVL	AX, ret_lo+0(FP)
 	MOVL	DX, ret_hi+4(FP)
@@ -1442,7 +1451,7 @@ TEXT bytes·Compare(SB),NOSPLIT,$0-28
 	MOVL	AX, ret+24(FP)
 	RET
 
-TEXT bytes·IndexByte(SB),NOSPLIT,$0
+TEXT bytes·IndexByte(SB),NOSPLIT,$0-20
 	MOVL	s+0(FP), SI
 	MOVL	s_len+4(FP), CX
 	MOVB	c+12(FP), AL
@@ -1456,7 +1465,7 @@ TEXT bytes·IndexByte(SB),NOSPLIT,$0
 	MOVL	DI, ret+16(FP)
 	RET
 
-TEXT strings·IndexByte(SB),NOSPLIT,$0
+TEXT strings·IndexByte(SB),NOSPLIT,$0-16
 	MOVL	s+0(FP), SI
 	MOVL	s_len+4(FP), CX
 	MOVB	c+8(FP), AL
@@ -2413,6 +2422,8 @@ TEXT _cgo_topofstack(SB),NOSPLIT,$0
 TEXT runtime·goexit(SB),NOSPLIT,$0-0
 	BYTE	$0x90	// NOP
 	CALL	runtime·goexit1(SB)	// does not return
+	// traceback from goexit1 must hit code range of goexit
+	BYTE	$0x90	// NOP
 
 TEXT runtime·getg(SB),NOSPLIT,$0-4
 	get_tls(CX)
