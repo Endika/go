@@ -422,13 +422,14 @@ func newcfg(firstp *obj.Prog) []*BasicBlock {
 	bb := newblock(firstp)
 	cfg = append(cfg, bb)
 	for p := firstp; p != nil; p = p.Link {
+		Thearch.Proginfo(p)
 		if p.To.Type == obj.TYPE_BRANCH {
-			if p.To.U.Branch == nil {
+			if p.To.Val == nil {
 				Fatal("prog branch to nil")
 			}
-			if p.To.U.Branch.Opt == nil {
-				p.To.U.Branch.Opt = newblock(p.To.U.Branch)
-				cfg = append(cfg, p.To.U.Branch.Opt.(*BasicBlock))
+			if p.To.Val.(*obj.Prog).Opt == nil {
+				p.To.Val.(*obj.Prog).Opt = newblock(p.To.Val.(*obj.Prog))
+				cfg = append(cfg, p.To.Val.(*obj.Prog).Opt.(*BasicBlock))
 			}
 
 			if p.As != obj.AJMP && p.Link != nil && p.Link.Opt == nil {
@@ -467,7 +468,7 @@ func newcfg(firstp *obj.Prog) []*BasicBlock {
 		}
 
 		if bb.last.To.Type == obj.TYPE_BRANCH {
-			addedge(bb, bb.last.To.U.Branch.Opt.(*BasicBlock))
+			addedge(bb, bb.last.To.Val.(*obj.Prog).Opt.(*BasicBlock))
 		}
 		if bb.last.Link != nil {
 			// Add a fall-through when the instruction is
@@ -561,7 +562,6 @@ func progeffects(prog *obj.Prog, vars []*Node, uevar Bvec, varkill Bvec, avarini
 	bvresetall(varkill)
 	bvresetall(avarinit)
 
-	info := Thearch.Proginfo(prog)
 	if prog.As == obj.ARET {
 		// Return instructions implicitly read all the arguments.  For
 		// the sake of correctness, out arguments must be read.  For the
@@ -612,7 +612,7 @@ func progeffects(prog *obj.Prog, vars []*Node, uevar Bvec, varkill Bvec, avarini
 		return
 	}
 
-	if info.Flags&(LeftRead|LeftWrite|LeftAddr) != 0 {
+	if prog.Info.Flags&(LeftRead|LeftWrite|LeftAddr) != 0 {
 		from := &prog.From
 		if from.Node != nil && from.Sym != nil && ((from.Node).(*Node)).Curfn == Curfn {
 			switch ((from.Node).(*Node)).Class &^ PHEAP {
@@ -629,10 +629,10 @@ func progeffects(prog *obj.Prog, vars []*Node, uevar Bvec, varkill Bvec, avarini
 				if ((from.Node).(*Node)).Addrtaken {
 					bvset(avarinit, pos)
 				} else {
-					if info.Flags&(LeftRead|LeftAddr) != 0 {
+					if prog.Info.Flags&(LeftRead|LeftAddr) != 0 {
 						bvset(uevar, pos)
 					}
-					if info.Flags&LeftWrite != 0 {
+					if prog.Info.Flags&LeftWrite != 0 {
 						if from.Node != nil && !Isfat(((from.Node).(*Node)).Type) {
 							bvset(varkill, pos)
 						}
@@ -643,7 +643,7 @@ func progeffects(prog *obj.Prog, vars []*Node, uevar Bvec, varkill Bvec, avarini
 	}
 
 Next:
-	if info.Flags&(RightRead|RightWrite|RightAddr) != 0 {
+	if prog.Info.Flags&(RightRead|RightWrite|RightAddr) != 0 {
 		to := &prog.To
 		if to.Node != nil && to.Sym != nil && ((to.Node).(*Node)).Curfn == Curfn {
 			switch ((to.Node).(*Node)).Class &^ PHEAP {
@@ -673,10 +673,10 @@ Next:
 					// It is not a read. It is equivalent to RightWrite except that
 					// having the RightAddr bit set keeps the registerizer from
 					// trying to substitute a register for the memory location.
-					if (info.Flags&RightRead != 0) || info.Flags&(RightAddr|RightWrite) == RightAddr {
+					if (prog.Info.Flags&RightRead != 0) || prog.Info.Flags&(RightAddr|RightWrite) == RightAddr {
 						bvset(uevar, pos)
 					}
-					if info.Flags&RightWrite != 0 {
+					if prog.Info.Flags&RightWrite != 0 {
 						if to.Node != nil && (!Isfat(((to.Node).(*Node)).Type) || prog.As == obj.AVARDEF) {
 							bvset(varkill, pos)
 						}
@@ -1054,8 +1054,8 @@ func newpcdataprog(prog *obj.Prog, index int32) *obj.Prog {
 	Nodconst(&to, Types[TINT32], int64(index))
 	pcdata := unlinkedprog(obj.APCDATA)
 	pcdata.Lineno = prog.Lineno
-	pcdata.From = Naddr(&from)
-	pcdata.To = Naddr(&to)
+	Naddr(&pcdata.From, &from)
+	Naddr(&pcdata.To, &to)
 	return pcdata
 }
 

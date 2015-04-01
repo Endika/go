@@ -332,6 +332,9 @@ func (p *Prog) String() string {
 	if p.To.Type != TYPE_NONE {
 		fmt.Fprintf(&buf, "%s%v", sep, Dconv(p, &p.To))
 	}
+	if p.To2.Type != TYPE_NONE {
+		fmt.Fprintf(&buf, "%s%v", sep, Dconv(p, &p.To2))
+	}
 	return buf.String()
 }
 
@@ -386,8 +389,8 @@ func Dconv(p *Prog, a *Addr) string {
 			str = fmt.Sprintf("%s(SB)", a.Sym.Name)
 		} else if p != nil && p.Pcond != nil {
 			str = fmt.Sprintf("%d", p.Pcond.Pc)
-		} else if a.U.Branch != nil {
-			str = fmt.Sprintf("%d", a.U.Branch.Pc)
+		} else if a.Val != nil {
+			str = fmt.Sprintf("%d", a.Val.(*Prog).Pc)
 		} else {
 			str = fmt.Sprintf("%d(PC)", a.Offset)
 		}
@@ -409,14 +412,14 @@ func Dconv(p *Prog, a *Addr) string {
 		}
 
 	case TYPE_TEXTSIZE:
-		if a.U.Argsize == ArgsSizeUnknown {
+		if a.Val.(int32) == ArgsSizeUnknown {
 			str = fmt.Sprintf("$%d", a.Offset)
 		} else {
-			str = fmt.Sprintf("$%d-%d", a.Offset, a.U.Argsize)
+			str = fmt.Sprintf("$%d-%d", a.Offset, a.Val.(int32))
 		}
 
 	case TYPE_FCONST:
-		str = fmt.Sprintf("%.17g", a.U.Dval)
+		str = fmt.Sprintf("%.17g", a.Val.(float64))
 		// Make sure 1 prints as 1.0
 		if !strings.ContainsAny(str, ".e") {
 			str += ".0"
@@ -424,7 +427,7 @@ func Dconv(p *Prog, a *Addr) string {
 		str = fmt.Sprintf("$(%s)", str)
 
 	case TYPE_SCONST:
-		str = fmt.Sprintf("$%q", a.U.Sval)
+		str = fmt.Sprintf("$%q", a.Val.(string))
 
 	case TYPE_ADDR:
 		str = fmt.Sprintf("$%s", Mconv(a))
@@ -523,10 +526,8 @@ const (
 	RBase386   = 1 * 1024
 	RBaseAMD64 = 2 * 1024
 	RBaseARM   = 3 * 1024
-	RBasePPC64 = 4 * 1024
-	// The next free base is 8*1024 (PPC64 has many registers).
-	// Alternatively, the next architecture, with an ordinary
-	// number of registers, could go under PPC64.
+	RBasePPC64 = 4 * 1024 // range [4k, 8k)
+	RBaseARM64 = 8 * 1024 // range [8k, 12k)
 )
 
 // RegisterRegister binds a pretty-printer (Rconv) for register
@@ -585,6 +586,7 @@ const (
 	ABaseARM
 	ABaseAMD64
 	ABasePPC64
+	ABaseARM64
 	AMask = 1<<12 - 1 // AND with this to use the opcode as an array index.
 )
 

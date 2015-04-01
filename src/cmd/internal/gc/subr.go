@@ -291,7 +291,9 @@ func LookupBytes(name []byte) *Sym {
 
 var initSyms []*Sym
 
-var nopkg = new(Pkg)
+var nopkg = &Pkg{
+	Syms: make(map[string]*Sym),
+}
 
 func (pkg *Pkg) Lookup(name string) *Sym {
 	if pkg == nil {
@@ -306,11 +308,8 @@ func (pkg *Pkg) Lookup(name string) *Sym {
 		Pkg:     pkg,
 		Lexical: LNAME,
 	}
-	if s.Name == "init" {
+	if name == "init" {
 		initSyms = append(initSyms, s)
-	}
-	if pkg.Syms == nil {
-		pkg.Syms = make(map[string]*Sym)
 	}
 	pkg.Syms[name] = s
 	return s
@@ -1009,7 +1008,7 @@ func eqtype1(t1 *Type, t2 *Type, assumed_equal *TypePairList) bool {
 		TSTRUCT:
 		t1 = t1.Type
 		t2 = t2.Type
-		for ; t1 != nil && t2 != nil; (func() { t1 = t1.Down; t2 = t2.Down })() {
+		for ; t1 != nil && t2 != nil; t1, t2 = t1.Down, t2.Down {
 			if t1.Etype != TFIELD || t2.Etype != TFIELD {
 				Fatal("struct/interface missing field: %v %v", Tconv(t1, 0), Tconv(t2, 0))
 			}
@@ -1027,18 +1026,15 @@ func eqtype1(t1 *Type, t2 *Type, assumed_equal *TypePairList) bool {
 	case TFUNC:
 		t1 = t1.Type
 		t2 = t2.Type
-		for ; t1 != nil && t2 != nil; (func() { t1 = t1.Down; t2 = t2.Down })() {
-			var ta *Type
-			var tb *Type
-
+		for ; t1 != nil && t2 != nil; t1, t2 = t1.Down, t2.Down {
 			if t1.Etype != TSTRUCT || t2.Etype != TSTRUCT {
 				Fatal("func missing struct: %v %v", Tconv(t1, 0), Tconv(t2, 0))
 			}
 
 			// Loop over fields in structs, ignoring argument names.
-			ta = t1.Type
-			tb = t2.Type
-			for ; ta != nil && tb != nil; (func() { ta = ta.Down; tb = tb.Down })() {
+			ta := t1.Type
+			tb := t2.Type
+			for ; ta != nil && tb != nil; ta, tb = ta.Down, tb.Down {
 				if ta.Etype != TFIELD || tb.Etype != TFIELD {
 					Fatal("func struct missing field: %v %v", Tconv(ta, 0), Tconv(tb, 0))
 				}
@@ -1320,8 +1316,12 @@ func convertop(src *Type, dst *Type, why *string) int {
 	return 0
 }
 
-// Convert node n for assignment to type t.
 func assignconv(n *Node, t *Type, context string) *Node {
+	return assignconvfn(n, t, func() string { return context })
+}
+
+// Convert node n for assignment to type t.
+func assignconvfn(n *Node, t *Type, context func() string) *Node {
 	if n == nil || n.Type == nil || n.Type.Broke != 0 {
 		return n
 	}
@@ -1357,7 +1357,7 @@ func assignconv(n *Node, t *Type, context string) *Node {
 	var why string
 	op := assignop(n.Type, t, &why)
 	if op == 0 {
-		Yyerror("cannot use %v as type %v in %s%s", Nconv(n, obj.FmtLong), Tconv(t, 0), context, why)
+		Yyerror("cannot use %v as type %v in %s%s", Nconv(n, obj.FmtLong), Tconv(t, 0), context(), why)
 		op = OCONV
 	}
 
@@ -1369,66 +1369,57 @@ func assignconv(n *Node, t *Type, context string) *Node {
 	return r
 }
 
-func subtype(stp **Type, t *Type, d int) bool {
-loop:
-	st := *stp
-	if st == nil {
-		return false
+// substArgTypes substitutes the given list of types for
+// successive occurrences of the "any" placeholder in the
+// type syntax expression n.Type.
+func substArgTypes(n *Node, types ...*Type) {
+	for _, t := range types {
+		dowidth(t)
 	}
-
-	d++
-	if d >= 10 {
-		return false
+	substAny(&n.Type, &types)
+	if len(types) > 0 {
+		Fatal("substArgTypes: too many argument types")
 	}
+}
 
-	switch st.Etype {
-	default:
-		return false
-
-	case TPTR32,
-		TPTR64,
-		TCHAN,
-		TARRAY:
-		stp = &st.Type
-		goto loop
-
-	case TANY:
-		if st.Copyany == 0 {
-			return false
+// substAny walks *tp, replacing instances of "any" with successive
+// elements removed from types.
+func substAny(tp **Type, types *[]*Type) {
+	for {
+		t := *tp
+		if t == nil {
+			return
 		}
-		*stp = t
-
-	case TMAP:
-		if subtype(&st.Down, t, d) {
-			break
-		}
-		stp = &st.Type
-		goto loop
-
-	case TFUNC:
-		for {
-			if subtype(&st.Type, t, d) {
-				break
+		if t.Etype == TANY && t.Copyany != 0 {
+			if len(*types) == 0 {
+				Fatal("substArgTypes: not enough argument types")
 			}
-			if subtype(&st.Type.Down.Down, t, d) {
-				break
-			}
-			if subtype(&st.Type.Down, t, d) {
-				break
-			}
-			return false
+			*tp = (*types)[0]
+			*types = (*types)[1:]
 		}
 
-	case TSTRUCT:
-		for st = st.Type; st != nil; st = st.Down {
-			if subtype(&st.Type, t, d) {
-				return true
+		switch t.Etype {
+		case TPTR32, TPTR64, TCHAN, TARRAY:
+			tp = &t.Type
+			continue
+
+		case TMAP:
+			substAny(&t.Down, types)
+			tp = &t.Type
+			continue
+
+		case TFUNC:
+			substAny(&t.Type, types)
+			substAny(&t.Type.Down.Down, types)
+			substAny(&t.Type.Down, types)
+
+		case TSTRUCT:
+			for t = t.Type; t != nil; t = t.Down {
+				substAny(&t.Type, types)
 			}
 		}
-		return false
+		return
 	}
-
-	return true
 }
 
 /*
@@ -1482,13 +1473,6 @@ func Noconv(t1 *Type, t2 *Type) bool {
 	}
 
 	return false
-}
-
-func argtype(on *Node, t *Type) {
-	dowidth(t)
-	if !subtype(&on.Type, t, 0) {
-		Fatal("argtype: failed %v %v\n", Nconv(on, 0), Tconv(t, 0))
-	}
 }
 
 func shallow(t *Type) *Type {
@@ -1586,10 +1570,10 @@ func typehash(t *Type) uint32 {
 		// hide method receiver from Tpretty
 		t.Thistuple = 0
 
-		p = fmt.Sprintf("%v", Tconv(t, obj.FmtLeft|obj.FmtUnsigned))
+		p = Tconv(t, obj.FmtLeft|obj.FmtUnsigned)
 		t.Thistuple = 1
 	} else {
-		p = fmt.Sprintf("%v", Tconv(t, obj.FmtLeft|obj.FmtUnsigned))
+		p = Tconv(t, obj.FmtLeft|obj.FmtUnsigned)
 	}
 
 	//print("typehash: %s\n", p);
@@ -2793,18 +2777,13 @@ func eqmemfunc(size int64, type_ *Type, needsize *int) *Node {
 		fn = syslook("memequal", 1)
 		*needsize = 1
 
-	case 1,
-		2,
-		4,
-		8,
-		16:
+	case 1, 2, 4, 8, 16:
 		buf := fmt.Sprintf("memequal%d", int(size)*8)
 		fn = syslook(buf, 1)
 		*needsize = 0
 	}
 
-	argtype(fn, type_)
-	argtype(fn, type_)
+	substArgTypes(fn, type_, type_)
 	return fn
 }
 
@@ -3478,6 +3457,7 @@ func mkpkg(path string) *Pkg {
 	p := new(Pkg)
 	p.Path = path
 	p.Prefix = pathtoprefix(path)
+	p.Syms = make(map[string]*Sym)
 	pkgMap[path] = p
 	pkgs = append(pkgs, p)
 	return p
@@ -3592,4 +3572,17 @@ func isdirectiface(t *Type) bool {
 	}
 
 	return false
+}
+
+// type2IET returns "T" if t is a concrete type,
+// "I" if t is an interface type, and "E" if t is an empty interface type.
+// It is used to build calls to the conv* and assert* runtime routines.
+func type2IET(t *Type) string {
+	if isnilinter(t) {
+		return "E"
+	}
+	if Isinter(t) {
+		return "I"
+	}
+	return "T"
 }

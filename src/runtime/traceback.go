@@ -357,6 +357,10 @@ func gentraceback(pc0, sp0, lr0 uintptr, gp *g, skip int, pcbuf *uintptr, max in
 		if usesLR && waspanic {
 			x := *(*uintptr)(unsafe.Pointer(frame.sp))
 			frame.sp += ptrSize
+			if GOARCH == "arm64" {
+				// arm64 needs 16-byte aligned SP, always
+				frame.sp += ptrSize
+			}
 			f = findfunc(frame.pc)
 			frame.fn = f
 			if f == nil {
@@ -642,7 +646,7 @@ func topofstack(f *_func) bool {
 		externalthreadhandlerp != 0 && pc == externalthreadhandlerp
 }
 
-// isSystemGoroutine returns true if the goroutine g must be omitted in
+// isSystemGoroutine reports whether the goroutine g must be omitted in
 // stack dumps and deadlock detector.
 func isSystemGoroutine(gp *g) bool {
 	pc := gp.startpc

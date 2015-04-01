@@ -7,11 +7,8 @@ package gc
 import (
 	"bytes"
 	"cmd/internal/obj"
+	"math/big"
 )
-
-// Copyright 2009 The Go Authors. All rights reserved.
-// Use of this source code is governed by a BSD-style
-// license that can be found in the LICENSE file.
 
 // avoid <ctype.h>
 
@@ -69,14 +66,22 @@ const (
 	Mpdebug = 0
 )
 
+// Mpint represents an integer constant.
 type Mpint struct {
+	Val big.Int
+	Ovf bool // set if Val overflowed compiler limit (sticky)
+}
+
+// Mpfix is the original (old) representation of an integer constant.
+// Still needed for Mpflt.
+type Mpfix struct {
 	A   [Mpprec]int
 	Neg uint8
 	Ovf uint8
 }
 
 type Mpflt struct {
-	Val Mpint
+	Val Mpfix
 	Exp int16
 }
 
@@ -126,6 +131,7 @@ type Sym struct {
 	Lastlineno int32  // last declaration for diagnostic
 	Origpkg    *Pkg   // original package for . import
 	Lsym       *obj.LSym
+	Fsym       *Sym // funcsym
 }
 
 type Type struct {
@@ -354,30 +360,6 @@ const (
 	Ecomplit  = 1 << 11 // type in composite literal
 )
 
-const (
-	BITS = 3
-	NVAR = BITS * 64
-)
-
-type Bits struct {
-	b [BITS]uint64
-}
-
-var zbits Bits
-
-type Var struct {
-	offset     int64
-	node       *Node
-	nextinnode *Var
-	width      int
-	id         int
-	name       int8
-	etype      int8
-	addr       int8
-}
-
-var var_ [NVAR]Var
-
 type Typedef struct {
 	Name   string
 	Etype  int
@@ -508,6 +490,7 @@ var Debug [256]int
 var debugstr string
 
 var Debug_checknil int
+var Debug_typeassert int
 
 var importmyname *Sym // my name for package
 
@@ -649,7 +632,7 @@ var typesw *Node
 
 var nblank *Node
 
-var Use_sse int
+var Use_sse bool // should we generate SSE2 instructions for 386 targets
 
 var hunk string
 
@@ -740,12 +723,6 @@ type Graph struct {
 /*
  *	interface to back end
  */
-type ProgInfo struct {
-	Flags    uint32 // the bits below
-	Reguse   uint64 // registers implicitly used by this instruction
-	Regset   uint64 // registers implicitly set by this instruction
-	Regindex uint64 // registers used by addressing mode
-}
 
 const (
 	// Pseudo-op, like TEXT, GLOBL, TYPE, PCDATA, FUNCDATA.
@@ -801,46 +778,60 @@ const (
 )
 
 type Arch struct {
-	Thechar        int
-	Thestring      string
-	Thelinkarch    *obj.LinkArch
-	Typedefs       []Typedef
-	REGSP          int
-	REGCTXT        int
-	MAXWIDTH       int64
-	Anyregalloc    func() bool
-	Betypeinit     func()
-	Bgen           func(*Node, bool, int, *obj.Prog)
-	Cgen           func(*Node, *Node)
-	Cgen_call      func(*Node, int)
-	Cgen_callinter func(*Node, *Node, int)
-	Cgen_ret       func(*Node)
-	Clearfat       func(*Node)
-	Defframe       func(*obj.Prog)
-	Excise         func(*Flow)
-	Expandchecks   func(*obj.Prog)
-	Gclean         func()
-	Ginit          func()
-	Gins           func(int, *Node, *Node) *obj.Prog
-	Ginscall       func(*Node, int)
-	Igen           func(*Node, *Node, *Node)
-	Linkarchinit   func()
-	Peep           func(*obj.Prog)
-	Proginfo       func(*obj.Prog) ProgInfo
-	Regalloc       func(*Node, *Type, *Node)
-	Regfree        func(*Node)
-	Regtyp         func(*obj.Addr) bool
-	Sameaddr       func(*obj.Addr, *obj.Addr) bool
-	Smallindir     func(*obj.Addr, *obj.Addr) bool
-	Stackaddr      func(*obj.Addr) bool
-	Excludedregs   func() uint64
-	RtoB           func(int) uint64
-	FtoB           func(int) uint64
-	BtoR           func(uint64) int
-	BtoF           func(uint64) int
-	Optoas         func(int, *Type) int
-	Doregbits      func(int) uint64
-	Regnames       func(*int) []string
+	Thechar      int
+	Thestring    string
+	Thelinkarch  *obj.LinkArch
+	Typedefs     []Typedef
+	REGSP        int
+	REGCTXT      int
+	REGCALLX     int // BX
+	REGCALLX2    int // AX
+	REGRETURN    int // AX
+	REGMIN       int
+	REGMAX       int
+	FREGMIN      int
+	FREGMAX      int
+	MAXWIDTH     int64
+	ReservedRegs []int
+
+	AddIndex     func(*Node, int64, *Node) bool // optional
+	Betypeinit   func()
+	Bgen_float   func(*Node, int, int, *obj.Prog) // optional
+	Cgen64       func(*Node, *Node)               // only on 32-bit systems
+	Cgenindex    func(*Node, *Node, bool) *obj.Prog
+	Cgen_bmul    func(int, *Node, *Node, *Node) bool
+	Cgen_float   func(*Node, *Node) // optional
+	Cgen_hmul    func(*Node, *Node, *Node)
+	Cgen_shift   func(int, bool, *Node, *Node, *Node)
+	Clearfat     func(*Node)
+	Cmp64        func(*Node, *Node, int, int, *obj.Prog) // only on 32-bit systems
+	Defframe     func(*obj.Prog)
+	Dodiv        func(int, *Node, *Node, *Node)
+	Excise       func(*Flow)
+	Expandchecks func(*obj.Prog)
+	Gins         func(int, *Node, *Node) *obj.Prog
+	Ginscon      func(int, int64, *Node)
+	Ginsnop      func()
+	Gmove        func(*Node, *Node)
+	Igenindex    func(*Node, *Node, bool) *obj.Prog
+	Linkarchinit func()
+	Peep         func(*obj.Prog)
+	Proginfo     func(*obj.Prog) // fills in Prog.Info
+	Regtyp       func(*obj.Addr) bool
+	Sameaddr     func(*obj.Addr, *obj.Addr) bool
+	Smallindir   func(*obj.Addr, *obj.Addr) bool
+	Stackaddr    func(*obj.Addr) bool
+	Stackcopy    func(*Node, *Node, int64, int64, int64)
+	Sudoaddable  func(int, *Node, *obj.Addr) bool
+	Sudoclean    func()
+	Excludedregs func() uint64
+	RtoB         func(int) uint64
+	FtoB         func(int) uint64
+	BtoR         func(uint64) int
+	BtoF         func(uint64) int
+	Optoas       func(int, *Type) int
+	Doregbits    func(int) uint64
+	Regnames     func(*int) []string
 }
 
 var pcloc int32

@@ -130,9 +130,6 @@ const (
 	_RootCount       = 5
 )
 
-// linker-provided
-var data, edata, bss, ebss, gcdata, gcbss, noptrdata, enoptrdata, noptrbss, enoptrbss, end struct{}
-
 //go:linkname weak_cgo_allocate go.weak.runtime._cgo_allocate_internal
 var weak_cgo_allocate byte
 
@@ -140,17 +137,6 @@ var weak_cgo_allocate byte
 //go:nowritebarrier
 func have_cgo_allocate() bool {
 	return &weak_cgo_allocate != nil
-}
-
-// Slow for now as we serialize this, since this is on a debug path
-// speed is not critical at this point.
-var andlock mutex
-
-//go:nowritebarrier
-func atomicand8(src *byte, val byte) {
-	lock(&andlock)
-	*src &= val
-	unlock(&andlock)
 }
 
 var gcdatamask bitvector
@@ -171,8 +157,8 @@ func gcinit() {
 
 	work.markfor = parforalloc(_MaxGcproc)
 	gcpercent = readgogc()
-	gcdatamask = unrollglobgcprog((*byte)(unsafe.Pointer(&gcdata)), uintptr(unsafe.Pointer(&edata))-uintptr(unsafe.Pointer(&data)))
-	gcbssmask = unrollglobgcprog((*byte)(unsafe.Pointer(&gcbss)), uintptr(unsafe.Pointer(&ebss))-uintptr(unsafe.Pointer(&bss)))
+	gcdatamask = unrollglobgcprog((*byte)(unsafe.Pointer(themoduledata.gcdata)), themoduledata.edata-themoduledata.data)
+	gcbssmask = unrollglobgcprog((*byte)(unsafe.Pointer(themoduledata.gcbss)), themoduledata.ebss-themoduledata.bss)
 	memstats.next_gc = heapminimum
 }
 
@@ -333,25 +319,30 @@ func gc(mode int) {
 			gcscan_m()
 			gctimer.cycle.installmarkwb = nanotime()
 
-			// Sync.
+			// Enter mark phase and enable write barriers.
 			stoptheworld()
 			gcphase = _GCmark
-			harvestwbufs()
 
 			// Concurrent mark.
 			starttheworld()
-			gctimer.cycle.mark = nanotime()
-			var gcw gcWork
-			gcDrain(&gcw)
-			gcw.dispose()
-
-			// Begin mark termination.
-			gctimer.cycle.markterm = nanotime()
-			stoptheworld()
-			// The gcphase is _GCmark, it will transition to _GCmarktermination
-			// below. The important thing is that the wb remains active until
-			// all marking is complete. This includes writes made by the GC.
 		})
+		gctimer.cycle.mark = nanotime()
+		var gcw gcWork
+		gcDrain(&gcw)
+		gcw.dispose()
+		// Despite the barrier in gcDrain, gcDrainNs may still
+		// be doing work at this point. This is okay because
+		// 1) the gcDrainNs happen on the system stack, so
+		// they will flush their work to the global queues
+		// before we can stop the world, and 2) it's fine if
+		// we go into mark termination with some work queued.
+
+		// Begin mark termination.
+		gctimer.cycle.markterm = nanotime()
+		systemstack(stoptheworld)
+		// The gcphase is _GCmark, it will transition to _GCmarktermination
+		// below. The important thing is that the wb remains active until
+		// all marking is complete. This includes writes made by the GC.
 	} else {
 		// For non-concurrent GC (mode != gcBackgroundMode)
 		// The g stacks have not been scanned so clear g state

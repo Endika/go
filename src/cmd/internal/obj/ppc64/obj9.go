@@ -56,7 +56,7 @@ func progedit(ctxt *obj.Link, p *obj.Prog) {
 	switch p.As {
 	case AFMOVS:
 		if p.From.Type == obj.TYPE_FCONST {
-			f32 := float32(p.From.U.Dval)
+			f32 := float32(p.From.Val.(float64))
 			i32 := math.Float32bits(f32)
 			literal := fmt.Sprintf("$f32.%08x", i32)
 			s := obj.Linklookup(ctxt, literal, 0)
@@ -69,7 +69,7 @@ func progedit(ctxt *obj.Link, p *obj.Prog) {
 
 	case AFMOVD:
 		if p.From.Type == obj.TYPE_FCONST {
-			i64 := math.Float64bits(p.From.U.Dval)
+			i64 := math.Float64bits(p.From.Val.(float64))
 			literal := fmt.Sprintf("$f64.%016x", i64)
 			s := obj.Linklookup(ctxt, literal, 0)
 			s.Size = 8
@@ -130,7 +130,7 @@ func preprocess(ctxt *obj.Link, cursym *obj.LSym) {
 	p := cursym.Text
 	textstksiz := p.To.Offset
 
-	cursym.Args = p.To.U.Argsize
+	cursym.Args = p.To.Val.(int32)
 	cursym.Locals = int32(textstksiz)
 
 	/*
@@ -855,7 +855,7 @@ loop:
 	if p.Mark&FOLL != 0 {
 		i = 0
 		q = p
-		for ; i < 4; (func() { i++; q = q.Link })() {
+		for ; i < 4; i, q = i+1, q.Link {
 			if q == *last || (q.Mark&NOSCHED != 0) {
 				break
 			}

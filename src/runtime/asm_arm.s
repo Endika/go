@@ -60,7 +60,7 @@ TEXT runtime·rt0_go(SB),NOSPLIT,$-4
 	BL	runtime·schedinit(SB)
 
 	// create a new goroutine to start program
-	MOVW	$runtime·main·f(SB), R0
+	MOVW	$runtime·mainPC(SB), R0
 	MOVW.W	R0, -4(R13)
 	MOVW	$8, R0
 	MOVW.W	R0, -4(R13)
@@ -76,8 +76,8 @@ TEXT runtime·rt0_go(SB),NOSPLIT,$-4
 	MOVW	$1000, R1
 	MOVW	R0, (R1)	// fail hard
 
-DATA	runtime·main·f+0(SB)/4,$runtime·main(SB)
-GLOBL	runtime·main·f(SB),RODATA,$4
+DATA	runtime·mainPC+0(SB)/4,$runtime·main(SB)
+GLOBL	runtime·mainPC(SB),RODATA,$4
 
 TEXT runtime·breakpoint(SB),NOSPLIT,$0-0
 	// gdb won't skip this breakpoint instruction automatically,
@@ -780,6 +780,57 @@ TEXT runtime·memequal_varlen(SB),NOSPLIT,$16-9
 eq:
 	MOVW	$1, R0
 	MOVB	R0, ret+8(FP)
+	RET
+
+TEXT runtime·cmpstring(SB),NOSPLIT,$0-20
+	MOVW	s1_base+0(FP), R2
+	MOVW	s1_len+4(FP), R0
+	MOVW	s2_base+8(FP), R3
+	MOVW	s2_len+12(FP), R1
+	BL	runtime·cmpbody(SB)
+	MOVW	R8, ret+16(FP)
+	RET
+
+TEXT bytes·Compare(SB),NOSPLIT,$0-28
+	MOVW	s1+0(FP), R2
+	MOVW	s1+4(FP), R0
+	MOVW	s2+12(FP), R3
+	MOVW	s2+16(FP), R1
+	BL	runtime·cmpbody(SB)
+	MOVW	R8, ret+24(FP)
+	RET
+
+// On entry:
+// R0 is the length of s1
+// R1 is the length of s2
+// R2 points to the start of s1
+// R3 points to the start of s2
+//
+// On exit:
+// R8 is -1/0/+1
+// R5, R4, and R6 are clobbered
+TEXT runtime·cmpbody(SB),NOSPLIT,$-4-0
+	CMP 	R0, R1
+	MOVW 	R0, R6
+	MOVW.LT	R1, R6	// R6 is min(R0, R1)
+
+	ADD	R2, R6	// R2 is current byte in s1, R6 is last byte in s1 to compare
+loop:
+	CMP	R2, R6
+	BEQ	samebytes // all compared bytes were the same; compare lengths
+	MOVBU.P	1(R2), R4
+	MOVBU.P	1(R3), R5
+	CMP	R4, R5
+	BEQ	loop
+	// bytes differed
+	MOVW.LT	$1, R8
+	MOVW.GT	$-1, R8
+	RET
+samebytes:
+	CMP	R0, R1
+	MOVW.LT	$1, R8
+	MOVW.GT	$-1, R8
+	MOVW.EQ	$0, R8
 	RET
 
 // eqstring tests whether two strings are equal.

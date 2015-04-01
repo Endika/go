@@ -43,10 +43,11 @@ var goroot string
 var debugtab = []struct {
 	name string
 	val  *int
-}{struct {
-	name string
-	val  *int
-}{"nil", &Debug_checknil}}
+}{
+	{"nil", &Debug_checknil},          // print information about nil checks
+	{"typeassert", &Debug_typeassert}, // print information about type assertion inlining
+	{"disablenil", &Disable_checknil}, // disable nil checks
+}
 
 // Our own isdigit, isspace, isalpha, isalnum that take care
 // of EOF and other out of range arguments.
@@ -277,13 +278,13 @@ func Main() {
 	}
 
 	if Thearch.Thechar == '8' {
-		p := obj.Getgo386()
-		if p == "387" {
-			Use_sse = 0
-		} else if p == "sse2" {
-			Use_sse = 1
-		} else {
-			log.Fatalf("unsupported setting GO386=%s", p)
+		switch v := obj.Getgo386(); v {
+		case "387":
+			Use_sse = false
+		case "sse2":
+			Use_sse = true
+		default:
+			log.Fatalf("unsupported setting GO386=%s", v)
 		}
 	}
 
@@ -1401,7 +1402,7 @@ ncu:
 	str = lexbuf.String()
 	yylval.val.U.Xval = new(Mpint)
 	mpatofix(yylval.val.U.Xval, str)
-	if yylval.val.U.Xval.Ovf != 0 {
+	if yylval.val.U.Xval.Ovf {
 		Yyerror("overflow in constant")
 		Mpmovecfix(yylval.val.U.Xval, 0)
 	}
@@ -1544,14 +1545,15 @@ func getlinepragma() int {
 			}
 			cp.WriteByte(byte(c))
 		}
-
 		cp = nil
 
-		if strings.HasPrefix(lexbuf.String(), "go:cgo_") {
-			pragcgo(lexbuf.String())
+		text := lexbuf.String()
+
+		if strings.HasPrefix(text, "go:cgo_") {
+			pragcgo(text)
 		}
 
-		cmd = lexbuf.String()
+		cmd = text
 		verb = cmd
 		if i := strings.Index(verb, " "); i >= 0 {
 			verb = verb[:i]
@@ -1630,8 +1632,9 @@ func getlinepragma() int {
 	if linep == 0 {
 		return c
 	}
+	text := lexbuf.String()
 	n := 0
-	for _, c := range lexbuf.String()[linep:] {
+	for _, c := range text[linep:] {
 		if c < '0' || c > '9' {
 			goto out
 		}
@@ -1646,15 +1649,7 @@ func getlinepragma() int {
 		return c
 	}
 
-	// try to avoid allocating file name over and over
-	name = lexbuf.String()[:linep-1]
-	for h := Ctxt.Hist; h != nil; h = h.Link {
-		if h.Name != "" && h.Name == name {
-			linehist(h.Name, int32(n), 0)
-			return c
-		}
-	}
-
+	name = text[:linep-1]
 	linehist(name, int32(n), 0)
 	return c
 

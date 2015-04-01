@@ -30,7 +30,12 @@
 
 package gc
 
-import "cmd/internal/obj"
+import (
+	"cmd/internal/obj"
+	"fmt"
+	"runtime"
+	"strings"
+)
 
 var ddumped int
 
@@ -79,8 +84,8 @@ func Samereg(a *Node, b *Node) bool {
 func Gbranch(as int, t *Type, likely int) *obj.Prog {
 	p := Prog(as)
 	p.To.Type = obj.TYPE_BRANCH
-	p.To.U.Branch = nil
-	if as != obj.AJMP && likely != 0 && Thearch.Thechar != '9' {
+	p.To.Val = nil
+	if as != obj.AJMP && likely != 0 && Thearch.Thechar != '9' && Thearch.Thechar != '7' {
 		p.From.Type = obj.TYPE_CONST
 		p.From.Offset = int64(bool2int(likely > 0))
 	}
@@ -273,7 +278,9 @@ func markautoused(p *obj.Prog) {
 	}
 }
 
-func Naddr(n *Node) (a obj.Addr) {
+// Naddr rewrites a to refer to n.
+// It assumes that a is zeroed on entry.
+func Naddr(a *obj.Addr, n *Node) {
 	if n == nil {
 		return
 	}
@@ -293,7 +300,9 @@ func Naddr(n *Node) (a obj.Addr) {
 	switch n.Op {
 	default:
 		a := a // copy to let escape into Ctxt.Dconv
-		Fatal("naddr: bad %v %v", Oconv(int(n.Op), 0), Ctxt.Dconv(&a))
+		Debug['h'] = 1
+		Dump("naddr", n)
+		Fatal("naddr: bad %v %v", Oconv(int(n.Op), 0), Ctxt.Dconv(a))
 
 	case OREGISTER:
 		a.Type = obj.TYPE_REG
@@ -337,7 +346,7 @@ func Naddr(n *Node) (a obj.Addr) {
 		a.Offset = n.Xoffset
 
 	case OCFUNC:
-		a = Naddr(n.Left)
+		Naddr(a, n.Left)
 		a.Sym = Linksym(n.Left.Sym)
 
 	case ONAME:
@@ -398,7 +407,7 @@ func Naddr(n *Node) (a obj.Addr) {
 
 		case CTFLT:
 			a.Type = obj.TYPE_FCONST
-			a.U.Dval = mpgetflt(n.Val.U.Fval)
+			a.Val = mpgetflt(n.Val.U.Fval)
 
 		case CTINT,
 			CTRUNE:
@@ -407,7 +416,7 @@ func Naddr(n *Node) (a obj.Addr) {
 			a.Offset = Mpgetfix(n.Val.U.Xval)
 
 		case CTSTR:
-			datagostring(n.Val.U.Sval, &a)
+			datagostring(n.Val.U.Sval, a)
 
 		case CTBOOL:
 			a.Sym = nil
@@ -421,20 +430,20 @@ func Naddr(n *Node) (a obj.Addr) {
 		}
 
 	case OADDR:
-		a = Naddr(n.Left)
+		Naddr(a, n.Left)
 		a.Etype = uint8(Tptr)
-		if Thearch.Thechar != '5' && Thearch.Thechar != '9' { // TODO(rsc): Do this even for arm, ppc64.
+		if Thearch.Thechar != '5' && Thearch.Thechar != '7' && Thearch.Thechar != '9' { // TODO(rsc): Do this even for arm, ppc64.
 			a.Width = int64(Widthptr)
 		}
 		if a.Type != obj.TYPE_MEM {
 			a := a // copy to let escape into Ctxt.Dconv
-			Fatal("naddr: OADDR %v (from %v)", Ctxt.Dconv(&a), Oconv(int(n.Left.Op), 0))
+			Fatal("naddr: OADDR %v (from %v)", Ctxt.Dconv(a), Oconv(int(n.Left.Op), 0))
 		}
 		a.Type = obj.TYPE_ADDR
 
 		// itable of interface value
 	case OITAB:
-		a = Naddr(n.Left)
+		Naddr(a, n.Left)
 
 		if a.Type == obj.TYPE_CONST && a.Offset == 0 {
 			break // itab(nil)
@@ -444,7 +453,7 @@ func Naddr(n *Node) (a obj.Addr) {
 
 		// pointer in a string or slice
 	case OSPTR:
-		a = Naddr(n.Left)
+		Naddr(a, n.Left)
 
 		if a.Type == obj.TYPE_CONST && a.Offset == 0 {
 			break // ptr(nil)
@@ -455,13 +464,13 @@ func Naddr(n *Node) (a obj.Addr) {
 
 		// len of string or slice
 	case OLEN:
-		a = Naddr(n.Left)
+		Naddr(a, n.Left)
 
 		if a.Type == obj.TYPE_CONST && a.Offset == 0 {
 			break // len(nil)
 		}
 		a.Etype = Simtype[TUINT]
-		if Thearch.Thechar == '9' {
+		if Thearch.Thechar == '7' || Thearch.Thechar == '9' {
 			a.Etype = Simtype[TINT]
 		}
 		a.Offset += int64(Array_nel)
@@ -471,13 +480,13 @@ func Naddr(n *Node) (a obj.Addr) {
 
 		// cap of string or slice
 	case OCAP:
-		a = Naddr(n.Left)
+		Naddr(a, n.Left)
 
 		if a.Type == obj.TYPE_CONST && a.Offset == 0 {
 			break // cap(nil)
 		}
 		a.Etype = Simtype[TUINT]
-		if Thearch.Thechar == '9' {
+		if Thearch.Thechar == '7' || Thearch.Thechar == '9' {
 			a.Etype = Simtype[TINT]
 		}
 		a.Offset += int64(Array_cap)
@@ -557,11 +566,8 @@ fp:
 		n.Op = OINDREG
 
 		n.Val.U.Reg = int16(Thearch.REGSP)
-		if Thearch.Thechar == '5' {
-			n.Xoffset += 4
-		}
-		if Thearch.Thechar == '9' {
-			n.Xoffset += 8
+		if HasLinkRegister() {
+			n.Xoffset += int64(Ctxt.Arch.Ptrsize)
 		}
 
 	case 1: // input arg
@@ -569,10 +575,6 @@ fp:
 
 	case 2: // offset output arg
 		Fatal("shouldn't be used")
-
-		n.Op = OINDREG
-		n.Val.U.Reg = int16(Thearch.REGSP)
-		n.Xoffset += Types[Tptr].Width
 	}
 
 	n.Typecheck = 1
@@ -583,7 +585,7 @@ func Patch(p *obj.Prog, to *obj.Prog) {
 	if p.To.Type != obj.TYPE_BRANCH {
 		Fatal("patch: not a branch")
 	}
-	p.To.U.Branch = to
+	p.To.Val = to
 	p.To.Offset = to.Pc
 }
 
@@ -591,8 +593,237 @@ func unpatch(p *obj.Prog) *obj.Prog {
 	if p.To.Type != obj.TYPE_BRANCH {
 		Fatal("unpatch: not a branch")
 	}
-	q := p.To.U.Branch
-	p.To.U.Branch = nil
+	q, _ := p.To.Val.(*obj.Prog)
+	p.To.Val = nil
 	p.To.Offset = 0
 	return q
+}
+
+var reg [100]int       // count of references to reg
+var regstk [100][]byte // allocation sites, when -v is given
+
+func ginit() {
+	for r := range reg {
+		reg[r] = 1
+	}
+
+	for r := Thearch.REGMIN; r <= Thearch.REGMAX; r++ {
+		reg[r-Thearch.REGMIN] = 0
+	}
+	for r := Thearch.FREGMIN; r <= Thearch.FREGMAX; r++ {
+		reg[r-Thearch.REGMIN] = 0
+	}
+
+	for _, r := range Thearch.ReservedRegs {
+		reg[r-Thearch.REGMIN] = 1
+	}
+}
+
+func gclean() {
+	for _, r := range Thearch.ReservedRegs {
+		reg[r-Thearch.REGMIN]--
+	}
+
+	for r := Thearch.REGMIN; r <= Thearch.REGMAX; r++ {
+		n := reg[r-Thearch.REGMIN]
+		if n != 0 {
+			Yyerror("reg %v left allocated", obj.Rconv(r))
+			if Debug['v'] != 0 {
+				Regdump()
+			}
+		}
+	}
+
+	for r := Thearch.FREGMIN; r <= Thearch.FREGMAX; r++ {
+		n := reg[r-Thearch.REGMIN]
+		if n != 0 {
+			Yyerror("reg %v left allocated", obj.Rconv(r))
+			if Debug['v'] != 0 {
+				Regdump()
+			}
+		}
+	}
+}
+
+func Anyregalloc() bool {
+	n := 0
+	for r := Thearch.REGMIN; r <= Thearch.REGMAX; r++ {
+		if reg[r-Thearch.REGMIN] == 0 {
+			n++
+		}
+	}
+	return n > len(Thearch.ReservedRegs)
+}
+
+/*
+ * allocate register of type t, leave in n.
+ * if o != N, o may be reusable register.
+ * caller must Regfree(n).
+ */
+func Regalloc(n *Node, t *Type, o *Node) {
+	if t == nil {
+		Fatal("regalloc: t nil")
+	}
+	et := int(Simtype[t.Etype])
+	if Ctxt.Arch.Regsize == 4 && (et == TINT64 || et == TUINT64) {
+		Fatal("regalloc 64bit")
+	}
+
+	var i int
+Switch:
+	switch et {
+	default:
+		Fatal("regalloc: unknown type %v", Tconv(t, 0))
+
+	case TINT8, TUINT8, TINT16, TUINT16, TINT32, TUINT32, TINT64, TUINT64, TPTR32, TPTR64, TBOOL:
+		if o != nil && o.Op == OREGISTER {
+			i = int(o.Val.U.Reg)
+			if Thearch.REGMIN <= i && i <= Thearch.REGMAX {
+				break Switch
+			}
+		}
+		for i = Thearch.REGMIN; i <= Thearch.REGMAX; i++ {
+			if reg[i-Thearch.REGMIN] == 0 {
+				break Switch
+			}
+		}
+		Flusherrors()
+		Regdump()
+		Fatal("out of fixed registers")
+
+	case TFLOAT32, TFLOAT64:
+		if Thearch.Thechar == '8' && !Use_sse {
+			i = Thearch.FREGMIN // x86.REG_F0
+			break Switch
+		}
+		if o != nil && o.Op == OREGISTER {
+			i = int(o.Val.U.Reg)
+			if Thearch.FREGMIN <= i && i <= Thearch.FREGMAX {
+				break Switch
+			}
+		}
+		for i = Thearch.FREGMIN; i <= Thearch.FREGMAX; i++ {
+			if reg[i-Thearch.REGMIN] == 0 { // note: REGMIN, not FREGMIN
+				break Switch
+			}
+		}
+		Flusherrors()
+		Regdump()
+		Fatal("out of floating registers")
+
+	case TCOMPLEX64, TCOMPLEX128:
+		Tempname(n, t)
+		return
+	}
+
+	ix := i - Thearch.REGMIN
+	if reg[ix] == 0 && Debug['v'] > 0 {
+		if regstk[ix] == nil {
+			regstk[ix] = make([]byte, 4096)
+		}
+		stk := regstk[ix]
+		n := runtime.Stack(stk[:cap(stk)], false)
+		regstk[ix] = stk[:n]
+	}
+	reg[ix]++
+	Nodreg(n, t, i)
+}
+
+func Regfree(n *Node) {
+	if n.Op == ONAME {
+		return
+	}
+	if n.Op != OREGISTER && n.Op != OINDREG {
+		Fatal("regfree: not a register")
+	}
+	i := int(n.Val.U.Reg)
+	if i == Thearch.REGSP {
+		return
+	}
+	switch {
+	case Thearch.REGMIN <= i && i <= Thearch.REGMAX,
+		Thearch.FREGMIN <= i && i <= Thearch.FREGMAX:
+		// ok
+	default:
+		Fatal("regfree: reg out of range")
+	}
+
+	i -= Thearch.REGMIN
+	if reg[i] <= 0 {
+		Fatal("regfree: reg not allocated")
+	}
+	reg[i]--
+	if reg[i] == 0 {
+		regstk[i] = regstk[i][:0]
+	}
+}
+
+// Reginuse reports whether r is in use.
+func Reginuse(r int) bool {
+	switch {
+	case Thearch.REGMIN <= r && r <= Thearch.REGMAX,
+		Thearch.FREGMIN <= r && r <= Thearch.FREGMAX:
+		// ok
+	default:
+		Fatal("reginuse: reg out of range")
+	}
+
+	return reg[r-Thearch.REGMIN] > 0
+}
+
+// Regrealloc(n) undoes the effect of Regfree(n),
+// so that a register can be given up but then reclaimed.
+func Regrealloc(n *Node) {
+	if n.Op != OREGISTER && n.Op != OINDREG {
+		Fatal("regrealloc: not a register")
+	}
+	i := int(n.Val.U.Reg)
+	if i == Thearch.REGSP {
+		return
+	}
+	switch {
+	case Thearch.REGMIN <= i && i <= Thearch.REGMAX,
+		Thearch.FREGMIN <= i && i <= Thearch.FREGMAX:
+		// ok
+	default:
+		Fatal("regrealloc: reg out of range")
+	}
+
+	i -= Thearch.REGMIN
+	if reg[i] == 0 && Debug['v'] > 0 {
+		if regstk[i] == nil {
+			regstk[i] = make([]byte, 4096)
+		}
+		stk := regstk[i]
+		n := runtime.Stack(stk[:cap(stk)], false)
+		regstk[i] = stk[:n]
+	}
+	reg[i]++
+}
+
+func Regdump() {
+	if Debug['v'] == 0 {
+		fmt.Printf("run compiler with -v for register allocation sites\n")
+		return
+	}
+
+	dump := func(r int) {
+		stk := regstk[r-Thearch.REGMIN]
+		if len(stk) == 0 {
+			return
+		}
+		fmt.Printf("reg %v allocated at:\n", obj.Rconv(r))
+		fmt.Printf("\t%s\n", strings.Replace(strings.TrimSpace(string(stk)), "\n", "\n\t", -1))
+	}
+
+	for r := Thearch.REGMIN; r <= Thearch.REGMAX; r++ {
+		if reg[r-Thearch.REGMIN] != 0 {
+			dump(r)
+		}
+	}
+	for r := Thearch.FREGMIN; r <= Thearch.FREGMAX; r++ {
+		if reg[r-Thearch.REGMIN] == 0 {
+			dump(r)
+		}
+	}
 }

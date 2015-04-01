@@ -257,7 +257,6 @@ func subprop(r0 *gc.Flow) bool {
 	if !regtyp(v2) {
 		return false
 	}
-	var info gc.ProgInfo
 	for r := gc.Uniqp(r0); r != nil; r = gc.Uniqp(r) {
 		if gc.Uniqs(r) == nil {
 			break
@@ -266,14 +265,16 @@ func subprop(r0 *gc.Flow) bool {
 		if p.As == obj.AVARDEF || p.As == obj.AVARKILL {
 			continue
 		}
-		info = proginfo(p)
-		if info.Flags&gc.Call != 0 {
+		if p.Info.Flags&gc.Call != 0 {
 			return false
 		}
 
-		if (info.Flags&gc.CanRegRead != 0) && p.To.Type == obj.TYPE_REG {
-			info.Flags |= gc.RegRead
-			info.Flags &^= (gc.CanRegRead | gc.RightRead)
+		// TODO(rsc): Whatever invalidated the info should have done this call.
+		proginfo(p)
+
+		if (p.Info.Flags&gc.CanRegRead != 0) && p.To.Type == obj.TYPE_REG {
+			p.Info.Flags |= gc.RegRead
+			p.Info.Flags &^= (gc.CanRegRead | gc.RightRead)
 			p.Reg = p.To.Reg
 		}
 
@@ -284,7 +285,7 @@ func subprop(r0 *gc.Flow) bool {
 			return false
 		}
 
-		if info.Flags&(gc.RightRead|gc.RightWrite) == gc.RightWrite {
+		if p.Info.Flags&(gc.RightRead|gc.RightWrite) == gc.RightWrite {
 			if p.To.Type == v1.Type {
 				if p.To.Reg == v1.Reg {
 					if p.Scond == arm.C_SCOND_NONE {
@@ -788,7 +789,7 @@ func shiftprop(r *gc.Flow) bool {
 func findpre(r *gc.Flow, v *obj.Addr) *gc.Flow {
 	var r1 *gc.Flow
 
-	for r1 = gc.Uniqp(r); r1 != nil; (func() { r = r1; r1 = gc.Uniqp(r) })() {
+	for r1 = gc.Uniqp(r); r1 != nil; r, r1 = r1, gc.Uniqp(r1) {
 		if gc.Uniqs(r1) != r {
 			return nil
 		}
@@ -814,7 +815,7 @@ func findinc(r *gc.Flow, r2 *gc.Flow, v *obj.Addr) *gc.Flow {
 	var r1 *gc.Flow
 	var p *obj.Prog
 
-	for r1 = gc.Uniqs(r); r1 != nil && r1 != r2; (func() { r = r1; r1 = gc.Uniqs(r) })() {
+	for r1 = gc.Uniqs(r); r1 != nil && r1 != r2; r, r1 = r1, gc.Uniqs(r1) {
 		if gc.Uniqp(r1) != r {
 			return nil
 		}
@@ -1329,10 +1330,10 @@ func copyu(p *obj.Prog, v *obj.Addr, s *obj.Addr) int {
 	// R1 is ptr to memory, used and set, cannot be substituted.
 	case obj.ADUFFZERO:
 		if v.Type == obj.TYPE_REG {
-			if v.Reg == REGALLOC_R0 {
+			if v.Reg == arm.REG_R0 {
 				return 1
 			}
-			if v.Reg == REGALLOC_R0+1 {
+			if v.Reg == arm.REG_R0+1 {
 				return 2
 			}
 		}
@@ -1343,10 +1344,10 @@ func copyu(p *obj.Prog, v *obj.Addr, s *obj.Addr) int {
 	// R1, R2 areptr to src, dst, used and set, cannot be substituted.
 	case obj.ADUFFCOPY:
 		if v.Type == obj.TYPE_REG {
-			if v.Reg == REGALLOC_R0 {
+			if v.Reg == arm.REG_R0 {
 				return 3
 			}
-			if v.Reg == REGALLOC_R0+1 || v.Reg == REGALLOC_R0+2 {
+			if v.Reg == arm.REG_R0+1 || v.Reg == arm.REG_R0+2 {
 				return 2
 			}
 		}

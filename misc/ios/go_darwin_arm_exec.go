@@ -26,6 +26,10 @@ import (
 
 const debug = false
 
+var errRetry = errors.New("failed to start test harness (retry attempted)")
+
+var tmpdir string
+
 func main() {
 	log.SetFlags(0)
 	log.SetPrefix("go_darwin_arm_exec: ")
@@ -36,39 +40,39 @@ func main() {
 		log.Fatal("usage: go_darwin_arm_exec a.out")
 	}
 
-	if err := run(os.Args[1], os.Args[2:]); err != nil {
+	var err error
+	tmpdir, err = ioutil.TempDir("", "go_darwin_arm_exec_")
+	if err != nil {
+		log.Fatal(err)
+	}
+
+	// Approximately 1 in a 100 binaries fail to start. If it happens,
+	// try again. These failures happen for several reasons beyond
+	// our control, but all of them are safe to retry as they happen
+	// before lldb encounters the initial getwd breakpoint. As we
+	// know the tests haven't started, we are not hiding flaky tests
+	// with this retry.
+	for i := 0; i < 5; i++ {
+		if i > 0 {
+			fmt.Fprintln(os.Stderr, "start timeout, trying again")
+		}
+		err = run(os.Args[1], os.Args[2:])
+		if err == nil || err != errRetry {
+			break
+		}
+	}
+	if !debug {
+		os.RemoveAll(tmpdir)
+	}
+	if err != nil {
 		fmt.Fprintf(os.Stderr, "go_darwin_arm_exec: %v\n", err)
 		os.Exit(1)
 	}
 }
 
 func run(bin string, args []string) (err error) {
-	type waitPanic struct {
-		err error
-	}
-	defer func() {
-		if r := recover(); r != nil {
-			if w, ok := r.(waitPanic); ok {
-				err = w.err
-				return
-			}
-			panic(r)
-		}
-	}()
-
-	defer exec.Command("killall", "ios-deploy").Run() // cleanup
-
-	exec.Command("killall", "ios-deploy").Run()
-
-	tmpdir, err := ioutil.TempDir("", "go_darwin_arm_exec_")
-	if err != nil {
-		log.Fatal(err)
-	}
-	if !debug {
-		defer os.RemoveAll(tmpdir)
-	}
-
 	appdir := filepath.Join(tmpdir, "gotest.app")
+	os.RemoveAll(appdir)
 	if err := os.MkdirAll(appdir, 0755); err != nil {
 		return err
 	}
@@ -109,9 +113,31 @@ func run(bin string, args []string) (err error) {
 		return fmt.Errorf("codesign: %v", err)
 	}
 
-	if err := os.Chdir(tmpdir); err != nil {
+	oldwd, err := os.Getwd()
+	if err != nil {
 		return err
 	}
+	if err := os.Chdir(filepath.Join(appdir, "..")); err != nil {
+		return err
+	}
+	defer os.Chdir(oldwd)
+
+	type waitPanic struct {
+		err error
+	}
+	defer func() {
+		if r := recover(); r != nil {
+			if w, ok := r.(waitPanic); ok {
+				err = w.err
+				return
+			}
+			panic(r)
+		}
+	}()
+
+	defer exec.Command("killall", "ios-deploy").Run() // cleanup
+
+	exec.Command("killall", "ios-deploy").Run()
 
 	// ios-deploy invokes lldb to give us a shell session with the app.
 	cmd = exec.Command(
@@ -163,7 +189,7 @@ func run(bin string, args []string) (err error) {
 		exited <- cmd.Wait()
 	}()
 
-	waitFor := func(stage, str string) error {
+	waitFor := func(stage, str string, timeout time.Duration) error {
 		select {
 		case <-timedout:
 			w.printBuf()
@@ -174,21 +200,29 @@ func run(bin string, args []string) (err error) {
 		case err := <-exited:
 			w.printBuf()
 			return fmt.Errorf("failed (stage %s): %v", stage, err)
-		case i := <-w.find(str):
+		case i := <-w.find(str, timeout):
+			if i < 0 {
+				log.Printf("timed out on stage %q, retrying", stage)
+				return errRetry
+			}
 			w.clearTo(i + len(str))
 			return nil
 		}
 	}
 	do := func(cmd string) {
 		fmt.Fprintln(lldb, cmd)
-		if err := waitFor(fmt.Sprintf("prompt after %q", cmd), "(lldb)"); err != nil {
+		if err := waitFor(fmt.Sprintf("prompt after %q", cmd), "(lldb)", 0); err != nil {
 			panic(waitPanic{err})
 		}
 	}
 
 	// Wait for installation and connection.
-	if err := waitFor("ios-deploy before run", "(lldb)     connect\r\nProcess 0 connected\r\n"); err != nil {
-		return err
+	if err := waitFor("ios-deploy before run", "(lldb)     connect\r\nProcess 0 connected\r\n", 0); err != nil {
+		// Retry if we see a rare and longstanding ios-deploy bug.
+		// https://github.com/phonegap/ios-deploy/issues/11
+		//	Assertion failed: (AMDeviceStartService(device, CFSTR("com.apple.debugserver"), &gdbfd, NULL) == 0)
+		log.Printf("%v, retrying", err)
+		return errRetry
 	}
 
 	// Script LLDB. Oh dear.
@@ -201,10 +235,24 @@ func run(bin string, args []string) (err error) {
 	do(`breakpoint set -n getwd`) // in runtime/cgo/gcc_darwin_arm.go
 
 	fmt.Fprintln(lldb, `run`)
-	if err := waitFor("br getwd", "stop reason = breakpoint"); err != nil {
+	if err := waitFor("br getwd", "stop reason = breakpoint", 20*time.Second); err != nil {
+		// At this point we see several flaky errors from the iOS
+		// build infrastructure. The most common is never reaching
+		// the breakpoint, which we catch with a timeout. Very
+		// occasionally lldb can produce errors like:
+		//
+		//	Breakpoint 1: no locations (pending).
+		//	WARNING:  Unable to resolve breakpoint to any actual locations.
+		//
+		// As no actual test code has been executed by this point,
+		// we treat all errors as recoverable.
+		if err != errRetry {
+			log.Printf("%v, retrying", err)
+			err = errRetry
+		}
 		return err
 	}
-	if err := waitFor("br getwd prompt", "(lldb)"); err != nil {
+	if err := waitFor("br getwd prompt", "(lldb)", 0); err != nil {
 		return err
 	}
 
@@ -218,11 +266,11 @@ func run(bin string, args []string) (err error) {
 	// Watch for SIGSEGV. Ideally lldb would never break on SIGSEGV.
 	// http://golang.org/issue/10043
 	go func() {
-		<-w.find("stop reason = EXC_BAD_ACCESS")
+		<-w.find("stop reason = EXC_BAD_ACCESS", 0)
 		// cannot use do here, as the defer/recover is not available
 		// on this goroutine.
 		fmt.Fprintln(lldb, `bt`)
-		waitFor("finish backtrace", "(lldb)")
+		waitFor("finish backtrace", "(lldb)", 0)
 		w.printBuf()
 		if p := cmd.Process; p != nil {
 			p.Kill()
@@ -261,8 +309,9 @@ type bufWriter struct {
 	buf    []byte
 	suffix []byte // remove from each Write
 
-	findTxt []byte   // search buffer on each Write
-	findCh  chan int // report find position
+	findTxt   []byte   // search buffer on each Write
+	findCh    chan int // report find position
+	findAfter *time.Timer
 }
 
 func (w *bufWriter) Write(in []byte) (n int, err error) {
@@ -280,6 +329,10 @@ func (w *bufWriter) Write(in []byte) (n int, err error) {
 			close(w.findCh)
 			w.findTxt = nil
 			w.findCh = nil
+			if w.findAfter != nil {
+				w.findAfter.Stop()
+				w.findAfter = nil
+			}
 		}
 	}
 	return n, nil
@@ -307,7 +360,12 @@ func (w *bufWriter) clearTo(i int) {
 	w.buf = w.buf[i:]
 }
 
-func (w *bufWriter) find(str string) <-chan int {
+// find returns a channel that will have exactly one byte index sent
+// to it when the text str appears in the buffer. If the text does not
+// appear before timeout, -1 is sent.
+//
+// A timeout of zero means no timeout.
+func (w *bufWriter) find(str string, timeout time.Duration) <-chan int {
 	w.mu.Lock()
 	defer w.mu.Unlock()
 	if len(w.findTxt) > 0 {
@@ -321,6 +379,19 @@ func (w *bufWriter) find(str string) <-chan int {
 	} else {
 		w.findTxt = txt
 		w.findCh = ch
+		if timeout > 0 {
+			w.findAfter = time.AfterFunc(timeout, func() {
+				w.mu.Lock()
+				defer w.mu.Unlock()
+				if w.findCh == ch {
+					w.findTxt = nil
+					w.findCh = nil
+					w.findAfter = nil
+					ch <- -1
+					close(ch)
+				}
+			})
+		}
 	}
 	return ch
 }

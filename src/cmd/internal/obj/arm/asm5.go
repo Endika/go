@@ -595,7 +595,7 @@ func span5(ctxt *obj.Link, cursym *obj.LSym) {
 	var i int
 	var m int
 	var o *Optab
-	for ; p != nil || ctxt.Blitrl != nil; (func() { op = p; p = p.Link })() {
+	for ; p != nil || ctxt.Blitrl != nil; op, p = p, p.Link {
 		if p == nil {
 			if checkpool(ctxt, op, 0) {
 				p = op
@@ -1116,10 +1116,10 @@ func aclass(ctxt *obj.Link, a *obj.Addr) int {
 		return C_GOK
 
 	case obj.TYPE_FCONST:
-		if chipzero5(ctxt, a.U.Dval) >= 0 {
+		if chipzero5(ctxt, a.Val.(float64)) >= 0 {
 			return C_ZFCON
 		}
-		if chipfloat5(ctxt, a.U.Dval) >= 0 {
+		if chipfloat5(ctxt, a.Val.(float64)) >= 0 {
 			return C_SFCON
 		}
 		return C_LFCON
@@ -2259,7 +2259,7 @@ func asmout(ctxt *obj.Link, p *obj.Prog, o *Optab, out []uint32) {
 		}
 		o1 |= ((uint32(p.Scond) & C_SCOND) ^ C_SCOND_XOR) << 28
 		o1 |= (uint32(p.To.Reg) & 15) << 12
-		v := int32(chipfloat5(ctxt, p.From.U.Dval))
+		v := int32(chipfloat5(ctxt, p.From.Val.(float64)))
 		o1 |= (uint32(v) & 0xf) << 0
 		o1 |= (uint32(v) & 0xf0) << 12
 

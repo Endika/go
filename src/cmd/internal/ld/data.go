@@ -443,6 +443,8 @@ func relocsym(s *LSym) {
 					if rs.Type != SHOSTOBJ {
 						o += Symaddr(rs)
 					}
+				} else if HEADTYPE == Hwindows {
+					// nothing to do
 				} else {
 					Diag("unhandled pcrel relocation for %s", headstring)
 				}
@@ -497,6 +499,13 @@ func relocsym(s *LSym) {
 					} else {
 						o += int64(r.Siz)
 					}
+				} else if HEADTYPE == Hwindows && Thearch.Thechar == '6' { // only amd64 needs PCREL
+					// PE/COFF's PC32 relocation uses the address after the relocated
+					// bytes as the base. Compensate by skewing the addend.
+					o += int64(r.Siz)
+					// GNU ld always add VirtualAddress of the .text section to the
+					// relocated address, compensate that.
+					o -= int64(s.Sect.(*Section).Vaddr - PEBASE)
 				} else {
 					Diag("unhandled pcrel relocation for %s", headstring)
 				}
@@ -584,7 +593,7 @@ func reloc() {
 }
 
 func dynrelocsym(s *LSym) {
-	if HEADTYPE == Hwindows {
+	if HEADTYPE == Hwindows && Linkmode != LinkExternal {
 		rel := Linklookup(Ctxt, ".rel", 0)
 		if s == rel {
 			return
@@ -927,6 +936,15 @@ func Addstring(s *LSym, str string) int64 {
 	return int64(r)
 }
 
+func addinitarrdata(s *LSym) {
+	p := s.Name + ".ptr"
+	sp := Linklookup(Ctxt, p, 0)
+	sp.Type = SINITARR
+	sp.Size = 0
+	sp.Dupok = 1
+	Addaddr(Ctxt, sp, s)
+}
+
 func dosymtype() {
 	for s := Ctxt.Allsym; s != nil; s = s.Allsym {
 		if len(s.P) > 0 {
@@ -936,6 +954,11 @@ func dosymtype() {
 			if s.Type == SNOPTRBSS {
 				s.Type = SNOPTRDATA
 			}
+		}
+		// Create a new entry in the .init_array section that points to the
+		// library initializer function.
+		if Flag_shared != 0 && s.Name == INITENTRY {
+			addinitarrdata(s)
 		}
 	}
 }
@@ -1032,7 +1055,7 @@ func proggenarray(g *ProgGen, length int64) {
 
 	proggendataflush(g)
 	proggenemit(g, obj.InsArray)
-	for i = 0; i < int32(Thearch.Ptrsize); (func() { i++; length >>= 8 })() {
+	for i = 0; i < int32(Thearch.Ptrsize); i, length = i+1, length>>8 {
 		proggenemit(g, uint8(length))
 	}
 }

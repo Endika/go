@@ -63,11 +63,18 @@ func (z *Float) SetString(s string) (*Float, bool) {
 // be binary, if present (an "e" or "E" exponent indicator cannot be
 // distinguished from a mantissa digit).
 //
+// The returned *Float f is nil and the value of z is valid but not
+// defined if an error is reported.
+//
 // BUG(gri) The Float.Scan signature conflicts with Scan(s fmt.ScanState, ch rune) error.
 func (z *Float) Scan(r io.ByteScanner, base int) (f *Float, b int, err error) {
-	if z.prec == 0 {
-		z.prec = 64
+	prec := z.prec
+	if prec == 0 {
+		prec = 64
 	}
+
+	// A reasonable value in case of an error.
+	z.form = zero
 
 	// sign
 	z.neg, err = scanSign(r)
@@ -90,18 +97,15 @@ func (z *Float) Scan(r io.ByteScanner, base int) (f *Float, b int, err error) {
 		return
 	}
 
-	// set result
-	f = z
-
 	// special-case 0
 	if len(z.mant) == 0 {
+		z.prec = prec
 		z.acc = Exact
 		z.form = zero
+		f = z
 		return
 	}
 	// len(z.mant) > 0
-
-	z.form = finite
 
 	// The mantissa may have a decimal point (fcount <= 0) and there
 	// may be a nonzero exponent exp. The decimal point amounts to a
@@ -142,7 +146,15 @@ func (z *Float) Scan(r io.ByteScanner, base int) (f *Float, b int, err error) {
 	// we don't need exp anymore
 
 	// apply 2**exp2
-	z.setExp(exp2)
+	if MinExp <= exp2 && exp2 <= MaxExp {
+		z.prec = prec
+		z.form = finite
+		z.exp = int32(exp2)
+		f = z
+	} else {
+		err = fmt.Errorf("exponent overflow")
+		return
+	}
 
 	if exp10 == 0 {
 		// no decimal exponent to consider
@@ -160,7 +172,6 @@ func (z *Float) Scan(r io.ByteScanner, base int) (f *Float, b int, err error) {
 	fpowTen := new(Float).SetInt(new(Int).SetBits(powTen))
 
 	// apply 10**exp10
-	// (uquo and umul do the rounding)
 	if exp10 < 0 {
 		z.uquo(z, fpowTen)
 	} else {
@@ -171,8 +182,8 @@ func (z *Float) Scan(r io.ByteScanner, base int) (f *Float, b int, err error) {
 }
 
 // Parse is like z.Scan(r, base), but instead of reading from an
-// io.ByteScanner, it parses the string s. An error is returned if
-// the string contains invalid or trailing bytes not belonging to
+// io.ByteScanner, it parses the string s. An error is also returned
+// if the string contains invalid or trailing bytes not belonging to
 // the number.
 func (z *Float) Parse(s string, base int) (f *Float, b int, err error) {
 	r := strings.NewReader(s)
@@ -245,11 +256,6 @@ func (x *Float) Append(buf []byte, format byte, prec int) []byte {
 		}
 		buf = append(buf, ch)
 		return append(buf, "Inf"...)
-	}
-
-	// NaN
-	if x.IsNaN() {
-		return append(buf, "NaN"...)
 	}
 
 	// easy formats

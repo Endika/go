@@ -190,6 +190,18 @@ func progedit(ctxt *obj.Link, p *obj.Prog) {
 		}
 	}
 
+	// Rewrite MOVL/MOVQ $XXX(FP/SP) as LEAL/LEAQ.
+	if p.From.Type == obj.TYPE_ADDR && (ctxt.Arch.Thechar == '6' || p.From.Name != obj.NAME_EXTERN && p.From.Name != obj.NAME_STATIC) {
+		switch p.As {
+		case AMOVL:
+			p.As = ALEAL
+			p.From.Type = obj.TYPE_MEM
+		case AMOVQ:
+			p.As = ALEAQ
+			p.From.Type = obj.TYPE_MEM
+		}
+	}
+
 	if ctxt.Headtype == obj.Hnacl && p.Mode == 64 {
 		nacladdr(ctxt, p, &p.From3)
 		nacladdr(ctxt, p, &p.From)
@@ -201,7 +213,7 @@ func progedit(ctxt *obj.Link, p *obj.Prog) {
 	// Convert AMOVSS $(0), Xx to AXORPS Xx, Xx
 	case AMOVSS:
 		if p.From.Type == obj.TYPE_FCONST {
-			if p.From.U.Dval == 0 {
+			if p.From.Val.(float64) == 0 {
 				if p.To.Type == obj.TYPE_REG && REG_X0 <= p.To.Reg && p.To.Reg <= REG_X15 {
 					p.As = AXORPS
 					p.From = p.To
@@ -227,7 +239,7 @@ func progedit(ctxt *obj.Link, p *obj.Prog) {
 		ACOMISS,
 		AUCOMISS:
 		if p.From.Type == obj.TYPE_FCONST {
-			f32 := float32(p.From.U.Dval)
+			f32 := float32(p.From.Val.(float64))
 			i32 := math.Float32bits(f32)
 			literal := fmt.Sprintf("$f32.%08x", i32)
 			s := obj.Linklookup(ctxt, literal, 0)
@@ -246,7 +258,7 @@ func progedit(ctxt *obj.Link, p *obj.Prog) {
 	case AMOVSD:
 		// Convert AMOVSD $(0), Xx to AXORPS Xx, Xx
 		if p.From.Type == obj.TYPE_FCONST {
-			if p.From.U.Dval == 0 {
+			if p.From.Val.(float64) == 0 {
 				if p.To.Type == obj.TYPE_REG && REG_X0 <= p.To.Reg && p.To.Reg <= REG_X15 {
 					p.As = AXORPS
 					p.From = p.To
@@ -272,7 +284,7 @@ func progedit(ctxt *obj.Link, p *obj.Prog) {
 		ACOMISD,
 		AUCOMISD:
 		if p.From.Type == obj.TYPE_FCONST {
-			i64 := math.Float64bits(p.From.U.Dval)
+			i64 := math.Float64bits(p.From.Val.(float64))
 			literal := fmt.Sprintf("$f64.%016x", i64)
 			s := obj.Linklookup(ctxt, literal, 0)
 			if s.Type == 0 {
@@ -361,7 +373,7 @@ func preprocess(ctxt *obj.Link, cursym *obj.LSym) {
 		bpsize = 0
 	}
 
-	textarg := int64(p.To.U.Argsize)
+	textarg := int64(p.To.Val.(int32))
 	cursym.Args = int32(textarg)
 	cursym.Locals = int32(p.To.Offset)
 
@@ -1017,7 +1029,7 @@ loop:
 		 */
 		i = 0
 		q = p
-		for ; i < 4; (func() { i++; q = q.Link })() {
+		for ; i < 4; i, q = i+1, q.Link {
 			if q == nil {
 				break
 			}

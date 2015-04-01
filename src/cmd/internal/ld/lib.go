@@ -99,6 +99,7 @@ type Arch struct {
 	Elfsetupplt      func()
 	Gentext          func()
 	Machoreloc1      func(*Reloc, int64) int
+	PEreloc1         func(*Reloc, int64) bool
 	Lput             func(uint32)
 	Wput             func(uint16)
 	Vput             func(uint64)
@@ -378,24 +379,6 @@ func loadlib() {
 		if i < len(Ctxt.Library) {
 			objfile(Ctxt.Library[i].File, Ctxt.Library[i].Pkg)
 		}
-
-		// Pretend that we really imported the package.
-		s := Linklookup(Ctxt, "go.importpath.runtime/cgo.", 0)
-
-		s.Type = SDATA
-		s.Dupok = 1
-		s.Reachable = true
-
-		// Provided by the code that imports the package.
-		// Since we are simulating the import, we have to provide this string.
-		cgostrsym := "go.string.\"runtime/cgo\""
-
-		if Linkrlookup(Ctxt, cgostrsym, 0) == nil {
-			s := Linklookup(Ctxt, cgostrsym, 0)
-			s.Type = SRODATA
-			s.Reachable = true
-			addstrdata(cgostrsym, "runtime/cgo")
-		}
 	}
 
 	if Linkmode == LinkInternal {
@@ -429,7 +412,6 @@ func loadlib() {
 		tlsg.Type = STLSBSS
 	}
 	tlsg.Size = int64(Thearch.Ptrsize)
-	tlsg.Hide = 1
 	tlsg.Reachable = true
 	Ctxt.Tlsg = tlsg
 
@@ -744,6 +726,13 @@ func hostlink() {
 	if HEADTYPE == Hopenbsd {
 		argv = append(argv, "-Wl,-nopie")
 	}
+	if HEADTYPE == Hwindows {
+		if headstring == "windowsgui" {
+			argv = append(argv, "-mwindows")
+		} else {
+			argv = append(argv, "-mconsole")
+		}
+	}
 
 	if Iself && AssumeGoldLinker != 0 /*TypeKind(100016)*/ {
 		argv = append(argv, "-Wl,--rosegment")
@@ -843,6 +832,9 @@ func hostlink() {
 				}
 			}
 		}
+	}
+	if HEADTYPE == Hwindows {
+		argv = append(argv, peimporteddlls()...)
 	}
 
 	if Debug['v'] != 0 {
@@ -1064,7 +1056,7 @@ var (
 // allow stack checks here.
 
 func haslinkregister() bool {
-	return Thearch.Thechar == '5' || Thearch.Thechar == '9'
+	return Thearch.Thechar == '5' || Thearch.Thechar == '9' || Thearch.Thechar == '7'
 }
 
 func callsize() int {
@@ -1183,6 +1175,7 @@ func stkcheck(up *Chain, depth int) int {
 			// Direct call.
 			case R_CALL,
 				R_CALLARM,
+				R_CALLARM64,
 				R_CALLPOWER:
 				ch.limit = int(int32(limit) - pcsp.value - int32(callsize()))
 
@@ -1350,6 +1343,7 @@ func genasmsym(put func(*LSym, string, int, int64, int64, int, *LSym)) {
 			SRODATA,
 			SSYMTAB,
 			SPCLNTAB,
+			SINITARR,
 			SDATA,
 			SNOPTRDATA,
 			SELFROSECT,
@@ -1362,7 +1356,6 @@ func genasmsym(put func(*LSym, string, int, int64, int64, int, *LSym)) {
 				continue
 			}
 			put(s, s.Name, 'D', Symaddr(s), s.Size, int(s.Version), s.Gotype)
-			continue
 
 		case SBSS,
 			SNOPTRBSS:
@@ -1373,11 +1366,31 @@ func genasmsym(put func(*LSym, string, int, int64, int64, int, *LSym)) {
 				Diag("%s should not be bss (size=%d type=%d special=%d)", s.Name, int(len(s.P)), s.Type, s.Special)
 			}
 			put(s, s.Name, 'B', Symaddr(s), s.Size, int(s.Version), s.Gotype)
-			continue
 
 		case SFILE:
 			put(nil, s.Name, 'f', s.Value, 0, int(s.Version), nil)
-			continue
+
+		case SHOSTOBJ:
+			if HEADTYPE == Hwindows || Iself {
+				put(s, s.Name, 'U', s.Value, 0, int(s.Version), nil)
+			}
+
+		case SDYNIMPORT:
+			if !s.Reachable {
+				continue
+			}
+			put(s, s.Extname, 'U', 0, 0, int(s.Version), nil)
+
+		case STLSBSS:
+			if Linkmode == LinkExternal && HEADTYPE != Hopenbsd {
+				var type_ int
+				if goos == "android" {
+					type_ = 'B'
+				} else {
+					type_ = 't'
+				}
+				put(s, s.Name, type_, Symaddr(s), s.Size, int(s.Version), s.Gotype)
+			}
 		}
 	}
 

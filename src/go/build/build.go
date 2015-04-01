@@ -259,7 +259,6 @@ var Default Context = defaultContext()
 var cgoEnabled = map[string]bool{
 	"darwin/386":      true,
 	"darwin/amd64":    true,
-	"dragonfly/386":   true,
 	"dragonfly/amd64": true,
 	"freebsd/386":     true,
 	"freebsd/amd64":   true,
@@ -1229,7 +1228,7 @@ func splitQuoted(s string) (r []string, err error) {
 	return args, err
 }
 
-// match returns true if the name is one of:
+// match reports whether the name is one of:
 //
 //	$GOOS
 //	$GOARCH
@@ -1397,6 +1396,8 @@ func ArchChar(goarch string) (string, error) {
 		return "6", nil
 	case "arm":
 		return "5", nil
+	case "arm64":
+		return "7", nil
 	case "ppc64", "ppc64le":
 		return "9", nil
 	}

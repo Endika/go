@@ -7,6 +7,7 @@ package gc
 import (
 	"cmd/internal/obj"
 	"fmt"
+	"strconv"
 )
 
 /*
@@ -155,16 +156,18 @@ func Linksym(s *Sym) *obj.LSym {
 	if s.Lsym != nil {
 		return s.Lsym
 	}
+	var name string
 	if isblanksym(s) {
-		s.Lsym = obj.Linklookup(Ctxt, "_", 0)
+		name = "_"
 	} else if s.Linkname != "" {
-		s.Lsym = obj.Linklookup(Ctxt, s.Linkname, 0)
+		name = s.Linkname
 	} else {
-		p := fmt.Sprintf("%s.%s", s.Pkg.Prefix, s.Name)
-		s.Lsym = obj.Linklookup(Ctxt, p, 0)
+		name = s.Pkg.Prefix + "." + s.Name
 	}
 
-	return s.Lsym
+	ls := obj.Linklookup(Ctxt, name, 0)
+	s.Lsym = ls
+	return ls
 }
 
 func duintxx(s *Sym, off int, v uint64, wid int) int {
@@ -211,7 +214,7 @@ func stringsym(s string) *Sym {
 		// small strings get named by their contents,
 		// so that multiple modules using the same string
 		// can share it.
-		symname = fmt.Sprintf("%q", s)
+		symname = strconv.Quote(s)
 		pkg = gostringpkg
 	}
 
@@ -352,7 +355,7 @@ func dsname(s *Sym, off int, t string) int {
 	p.From3.Offset = int64(len(t))
 
 	p.To.Type = obj.TYPE_SCONST
-	p.To.U.Sval = t
+	p.To.Val = t
 	return off + len(t)
 }
 
@@ -401,14 +404,14 @@ func gdatacomplex(nam *Node, cval *Mpcplx) {
 	p.From3.Type = obj.TYPE_CONST
 	p.From3.Offset = int64(w)
 	p.To.Type = obj.TYPE_FCONST
-	p.To.U.Dval = mpgetflt(&cval.Real)
+	p.To.Val = mpgetflt(&cval.Real)
 
 	p = Thearch.Gins(obj.ADATA, nam, nil)
 	p.From3.Type = obj.TYPE_CONST
 	p.From3.Offset = int64(w)
 	p.From.Offset += int64(w)
 	p.To.Type = obj.TYPE_FCONST
-	p.To.U.Dval = mpgetflt(&cval.Imag)
+	p.To.Val = mpgetflt(&cval.Imag)
 }
 
 func gdatastring(nam *Node, sval string) {

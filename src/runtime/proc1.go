@@ -717,10 +717,15 @@ func mstart1() {
 	// Install signal handlers; after minit so that minit can
 	// prepare the thread to be able to handle the signals.
 	if _g_.m == &m0 {
+		// Create an extra M for callbacks on threads not created by Go.
+		if iscgo && !cgoHasExtraM {
+			cgoHasExtraM = true
+			newextram()
+		}
 		initsig()
 	}
 
-	if _g_.m.mstartfn != nil {
+	if _g_.m.mstartfn != 0 {
 		fn := *(*func())(unsafe.Pointer(&_g_.m.mstartfn))
 		fn()
 	}
@@ -733,10 +738,6 @@ func mstart1() {
 		_g_.m.nextp = nil
 	}
 	schedule()
-
-	// TODO(brainman): This point is never reached, because scheduler
-	// does not release os threads at the moment. But once this path
-	// is enabled, we must remove our seh here.
 }
 
 // When running with cgo, we call _cgo_thread_start
@@ -816,7 +817,7 @@ func allocm(_p_ *p) *m {
 // put the m back on the list.
 //go:nosplit
 func needm(x byte) {
-	if needextram != 0 {
+	if iscgo && !cgoHasExtraM {
 		// Can happen if C/C++ code calls Go from a global ctor.
 		// Can not throw, because scheduler is not initialized yet.
 		write(2, unsafe.Pointer(&earlycgocallback[0]), int32(len(earlycgocallback)))
@@ -971,17 +972,22 @@ func unlockextra(mp *m) {
 }
 
 // Create a new m.  It will start off with a call to fn, or else the scheduler.
+// fn needs to be static and not a heap allocated closure.
+// May run with m.p==nil, so write barriers are not allowed.
+//go:nowritebarrier
 func newm(fn func(), _p_ *p) {
 	mp := allocm(_p_)
-	mp.nextp = _p_
-	mp.mstartfn = *(*unsafe.Pointer)(unsafe.Pointer(&fn))
-
+	// procresize made _p_ reachable through allp, which doesn't change during GC, so WB can be eliminated
+	setPNoWriteBarrier(&mp.nextp, _p_)
+	// Store &fn as a uintptr since it is not heap allocated so the WB can be eliminated
+	mp.mstartfn = *(*uintptr)(unsafe.Pointer(&fn))
 	if iscgo {
 		var ts cgothreadstart
 		if _cgo_thread_start == nil {
 			throw("_cgo_thread_start missing")
 		}
-		ts.g = mp.g0
+		// mp is reachable via allm and mp.g0 never changes, so WB can be eliminated.
+		setGNoWriteBarrier(&ts.g, mp.g0)
 		ts.tls = (*uint64)(unsafe.Pointer(&mp.tls[0]))
 		ts.fn = unsafe.Pointer(funcPC(mstart))
 		asmcgocall(_cgo_thread_start, unsafe.Pointer(&ts))
@@ -1029,6 +1035,8 @@ func mspinning() {
 
 // Schedules some M to run the p (creates an M if necessary).
 // If p==nil, tries to get an idle P, if no idle P's does nothing.
+// May run with m.p==nil, so write barriers are not allowed.
+//go:nowritebarrier
 func startm(_p_ *p, spinning bool) {
 	lock(&sched.lock)
 	if _p_ == nil {
@@ -1058,11 +1066,14 @@ func startm(_p_ *p, spinning bool) {
 		throw("startm: m has p")
 	}
 	mp.spinning = spinning
-	mp.nextp = _p_
+	// procresize made _p_ reachable through allp, which doesn't change during GC, so WB can be eliminated
+	setPNoWriteBarrier(&mp.nextp, _p_)
 	notewakeup(&mp.park)
 }
 
 // Hands off P from syscall or locked M.
+// Always runs without a P, so write barriers are not allowed.
+//go:nowritebarrier
 func handoffp(_p_ *p) {
 	// if it has local work, start it straight away
 	if _p_.runqhead != _p_.runqtail || sched.runqsize != 0 {
@@ -1139,6 +1150,8 @@ func stoplockedm() {
 }
 
 // Schedules the locked m to run the locked gp.
+// May run during STW, so write barriers are not allowed.
+//go:nowritebarrier
 func startlockedm(gp *g) {
 	_g_ := getg()
 
@@ -1152,7 +1165,8 @@ func startlockedm(gp *g) {
 	// directly handoff current P to the locked m
 	incidlelocked(-1)
 	_p_ := releasep()
-	mp.nextp = _p_
+	// procresize made _p_ reachable through allp, which doesn't change during GC, so WB can be eliminated
+	setPNoWriteBarrier(&mp.nextp, _p_)
 	notewakeup(&mp.park)
 	stopm()
 }
@@ -1805,7 +1819,11 @@ func exitsyscall(dummy int32) {
 		for oldp != nil && oldp.syscalltick == _g_.m.syscalltick {
 			osyield()
 		}
-		systemstack(traceGoSysExit)
+		// This can't be done since the GC may be running and this code
+		// will invoke write barriers.
+		// TODO: Figure out how to get traceGoSysExit into the trace log or
+		// it is likely not to work as expected.
+		//		systemstack(traceGoSysExit)
 	}
 
 	_g_.m.locks--
@@ -2042,15 +2060,19 @@ func newproc1(fn *funcval, argp *uint8, narg int32, nret int32, callerpc uintptr
 		throw("newproc1: new g is not Gdead")
 	}
 
-	sp := newg.stack.hi
-	sp -= 4 * regSize // extra space in case of reads slightly beyond frame
-	sp -= uintptr(siz)
-	memmove(unsafe.Pointer(sp), unsafe.Pointer(argp), uintptr(narg))
+	totalSize := 4*regSize + uintptr(siz) // extra space in case of reads slightly beyond frame
+	if hasLinkRegister {
+		totalSize += ptrSize
+	}
+	totalSize += -totalSize & (spAlign - 1) // align to spAlign
+	sp := newg.stack.hi - totalSize
+	spArg := sp
 	if hasLinkRegister {
 		// caller's LR
-		sp -= ptrSize
 		*(*unsafe.Pointer)(unsafe.Pointer(sp)) = nil
+		spArg += ptrSize
 	}
+	memmove(unsafe.Pointer(spArg), unsafe.Pointer(argp), uintptr(narg))
 
 	memclr(unsafe.Pointer(&newg.sched), unsafe.Sizeof(newg.sched))
 	newg.sched.sp = sp
@@ -2271,8 +2293,6 @@ func _System()       { _System() }
 func _ExternalCode() { _ExternalCode() }
 func _GC()           { _GC() }
 
-var etext struct{}
-
 // Called if we receive a SIGPROF signal.
 func sigprof(pc, sp, lr uintptr, gp *g, mp *m) {
 	if prof.hz == 0 {
@@ -2386,7 +2406,7 @@ func sigprof(pc, sp, lr uintptr, gp *g, mp *m) {
 			// If all of the above has failed, account it against abstract "System" or "GC".
 			n = 2
 			// "ExternalCode" is better than "etext".
-			if pc > uintptr(unsafe.Pointer(&etext)) {
+			if pc > themoduledata.etext {
 				pc = funcPC(_ExternalCode) + _PCQuantum
 			}
 			stk[0] = pc
@@ -2565,6 +2585,8 @@ func procresize(nprocs int32) *p {
 }
 
 // Associate p and the current m.
+// May run during STW, so write barriers are not allowed.
+//go:nowritebarrier
 func acquirep(_p_ *p) {
 	_g_ := getg()
 
@@ -2579,9 +2601,12 @@ func acquirep(_p_ *p) {
 		print("acquirep: p->m=", _p_.m, "(", id, ") p->status=", _p_.status, "\n")
 		throw("acquirep: invalid p state")
 	}
-	_g_.m.mcache = _p_.mcache
-	_g_.m.p = _p_
-	_p_.m = _g_.m
+	// _p_.mcache holds the mcache and _p_ is in allp, so WB can be eliminated
+	setMcacheNoWriteBarrier(&_g_.m.mcache, _p_.mcache)
+	// _p_ is in allp so WB can be eliminated
+	setPNoWriteBarrier(&_g_.m.p, _p_)
+	// m is in _g_.m and is reachable through allg, so WB can be eliminated
+	setMNoWriteBarrier(&_p_.m, _g_.m)
 	_p_.status = _Prunning
 
 	if trace.enabled {
@@ -2987,19 +3012,26 @@ func schedtrace(detailed bool) {
 
 // Put mp on midle list.
 // Sched must be locked.
+// May run during STW, so write barriers are not allowed.
+//go:nowritebarrier
 func mput(mp *m) {
-	mp.schedlink = sched.midle
-	sched.midle = mp
+	// sched.midle is reachable via allm, so WB can be eliminated.
+	setMNoWriteBarrier(&mp.schedlink, sched.midle)
+	// mp is reachable via allm, so WB can be eliminated.
+	setMNoWriteBarrier(&sched.midle, mp)
 	sched.nmidle++
 	checkdead()
 }
 
 // Try to get an m from midle list.
 // Sched must be locked.
+// May run during STW, so write barriers are not allowed.
+//go:nowritebarrier
 func mget() *m {
 	mp := sched.midle
 	if mp != nil {
-		sched.midle = mp.schedlink
+		// mp.schedlink is reachable via mp, which is on allm, so WB can be eliminated.
+		setMNoWriteBarrier(&sched.midle, mp.schedlink)
 		sched.nmidle--
 	}
 	return mp
@@ -3007,14 +3039,17 @@ func mget() *m {
 
 // Put gp on the global runnable queue.
 // Sched must be locked.
+// May run during STW, so write barriers are not allowed.
+//go:nowritebarrier
 func globrunqput(gp *g) {
 	gp.schedlink = nil
 	if sched.runqtail != nil {
-		sched.runqtail.schedlink = gp
+		// gp is on allg, so these three WBs can be eliminated.
+		setGNoWriteBarrier(&sched.runqtail.schedlink, gp)
 	} else {
-		sched.runqhead = gp
+		setGNoWriteBarrier(&sched.runqhead, gp)
 	}
-	sched.runqtail = gp
+	setGNoWriteBarrier(&sched.runqtail, gp)
 	sched.runqsize++
 }
 
@@ -3067,18 +3102,24 @@ func globrunqget(_p_ *p, max int32) *g {
 
 // Put p to on _Pidle list.
 // Sched must be locked.
+// May run during STW, so write barriers are not allowed.
+//go:nowritebarrier
 func pidleput(_p_ *p) {
-	_p_.link = sched.pidle
-	sched.pidle = _p_
+	// sched.pidle, _p_.link and _p_ are reachable via allp, so WB can be eliminated.
+	setPNoWriteBarrier(&_p_.link, sched.pidle)
+	setPNoWriteBarrier(&sched.pidle, _p_)
 	xadd(&sched.npidle, 1) // TODO: fast atomic
 }
 
 // Try get a p from _Pidle list.
 // Sched must be locked.
+// May run during STW, so write barriers are not allowed.
+//go:nowritebarrier
 func pidleget() *p {
 	_p_ := sched.pidle
 	if _p_ != nil {
-		sched.pidle = _p_.link
+		// _p_.link is reachable via a _p_ in  allp, so WB can be eliminated.
+		setPNoWriteBarrier(&sched.pidle, _p_.link)
 		xadd(&sched.npidle, -1) // TODO: fast atomic
 	}
 	return _p_

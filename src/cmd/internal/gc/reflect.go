@@ -472,12 +472,25 @@ func dimportpath(p *Pkg) {
 		return
 	}
 
+	// If we are compiling the runtime package, there are two runtime packages around
+	// -- localpkg and Runtimepkg.  We don't want to produce import path symbols for
+	// both of them, so just produce one for localpkg.
+	if myimportpath == "runtime" && p == Runtimepkg {
+		return
+	}
+
 	if dimportpath_gopkg == nil {
 		dimportpath_gopkg = mkpkg("go")
 		dimportpath_gopkg.Name = "go"
 	}
 
-	nam := fmt.Sprintf("importpath.%s.", p.Prefix)
+	var nam string
+	if p == localpkg {
+		// Note: myimportpath != "", or else dgopkgpath won't call dimportpath.
+		nam = "importpath." + pathtoprefix(myimportpath) + "."
+	} else {
+		nam = "importpath." + p.Prefix + "."
+	}
 
 	n := Nod(ONAME, nil, nil)
 	n.Sym = Pkglookup(nam, dimportpath_gopkg)
@@ -495,10 +508,11 @@ func dgopkgpath(s *Sym, ot int, pkg *Pkg) int {
 		return dgostringptr(s, ot, "")
 	}
 
-	// Emit reference to go.importpath.""., which 6l will
-	// rewrite using the correct import path.  Every package
-	// that imports this one directly defines the symbol.
-	if pkg == localpkg {
+	if pkg == localpkg && myimportpath == "" {
+		// If we don't know the full path of the package being compiled (i.e. -p
+		// was not passed on the compiler command line), emit reference to
+		// go.importpath.""., which 6l will rewrite using the correct import path.
+		// Every package that imports this one directly defines the symbol.
 		var ns *Sym
 
 		if ns == nil {
@@ -808,7 +822,7 @@ func dcommontype(s *Sym, ot int, t *Type) int {
 		ot = duintptr(s, ot, 0)
 	}
 
-	p := fmt.Sprintf("%v", Tconv(t, obj.FmtLeft|obj.FmtUnsigned))
+	p := Tconv(t, obj.FmtLeft|obj.FmtUnsigned)
 
 	//print("dcommontype: %s\n", p);
 	ot = dgostringptr(s, ot, p) // string
@@ -825,19 +839,11 @@ func dcommontype(s *Sym, ot int, t *Type) int {
 }
 
 func typesym(t *Type) *Sym {
-	p := fmt.Sprintf("%v", Tconv(t, obj.FmtLeft))
-	s := Pkglookup(p, typepkg)
-
-	//print("typesym: %s -> %+S\n", p, s);
-
-	return s
+	return Pkglookup(Tconv(t, obj.FmtLeft), typepkg)
 }
 
 func tracksym(t *Type) *Sym {
-	p := fmt.Sprintf("%v.%s", Tconv(t.Outer, obj.FmtLeft), t.Sym.Name)
-	s := Pkglookup(p, trackpkg)
-
-	return s
+	return Pkglookup(Tconv(t.Outer, obj.FmtLeft)+"."+t.Sym.Name, trackpkg)
 }
 
 func typelinksym(t *Type) *Sym {
@@ -849,7 +855,7 @@ func typelinksym(t *Type) *Sym {
 	// disambiguate. The names are a little long but they are
 	// discarded by the linker and do not end up in the symbol
 	// table of the final binary.
-	p := fmt.Sprintf("%v/%v", Tconv(t, obj.FmtLeft|obj.FmtUnsigned), Tconv(t, obj.FmtLeft))
+	p := Tconv(t, obj.FmtLeft|obj.FmtUnsigned) + "/" + Tconv(t, obj.FmtLeft)
 
 	s := Pkglookup(p, typelinkpkg)
 
@@ -859,7 +865,7 @@ func typelinksym(t *Type) *Sym {
 }
 
 func typesymprefix(prefix string, t *Type) *Sym {
-	p := fmt.Sprintf("%s.%v", prefix, Tconv(t, obj.FmtLeft))
+	p := prefix + "." + Tconv(t, obj.FmtLeft)
 	s := Pkglookup(p, typepkg)
 
 	//print("algsym: %s -> %+S\n", p, s);
@@ -900,7 +906,7 @@ func typename(t *Type) *Node {
 }
 
 func weaktypesym(t *Type) *Sym {
-	p := fmt.Sprintf("%v", Tconv(t, obj.FmtLeft))
+	p := Tconv(t, obj.FmtLeft)
 	s := Pkglookup(p, weaktypepkg)
 
 	//print("weaktypesym: %s -> %+S\n", p, s);
@@ -962,9 +968,6 @@ func isreflexive(t *Type) bool {
 }
 
 func dtypesym(t *Type) *Sym {
-	var n int
-	var t1 *Type
-
 	// Replace byte, rune aliases with real type.
 	// They've been separate internally to make error messages
 	// better, but we have to merge them in the reflect tables.
@@ -1048,16 +1051,16 @@ ok:
 		ot = duintptr(s, ot, uint64(t.Chan))
 
 	case TFUNC:
-		for t1 = getthisx(t).Type; t1 != nil; t1 = t1.Down {
+		for t1 := getthisx(t).Type; t1 != nil; t1 = t1.Down {
 			dtypesym(t1.Type)
 		}
 		isddd := false
-		for t1 = getinargx(t).Type; t1 != nil; t1 = t1.Down {
+		for t1 := getinargx(t).Type; t1 != nil; t1 = t1.Down {
 			isddd = t1.Isddd
 			dtypesym(t1.Type)
 		}
 
-		for t1 = getoutargx(t).Type; t1 != nil; t1 = t1.Down {
+		for t1 := getoutargx(t).Type; t1 != nil; t1 = t1.Down {
 			dtypesym(t1.Type)
 		}
 
@@ -1069,7 +1072,7 @@ ok:
 		ot = int(Rnd(int64(ot), int64(Widthptr)))
 
 		ot = dsymptr(s, ot, s, ot+2*(Widthptr+2*Widthint))
-		n = t.Thistuple + t.Intuple
+		n := t.Thistuple + t.Intuple
 		ot = duintxx(s, ot, uint64(n), Widthint)
 		ot = duintxx(s, ot, uint64(n), Widthint)
 		ot = dsymptr(s, ot, s, ot+1*(Widthptr+2*Widthint)+n*Widthptr)
@@ -1077,19 +1080,22 @@ ok:
 		ot = duintxx(s, ot, uint64(t.Outtuple), Widthint)
 
 		// slice data
-		for t1 = getthisx(t).Type; t1 != nil; (func() { t1 = t1.Down; n++ })() {
+		for t1 := getthisx(t).Type; t1 != nil; t1 = t1.Down {
 			ot = dsymptr(s, ot, dtypesym(t1.Type), 0)
+			n++
 		}
-		for t1 = getinargx(t).Type; t1 != nil; (func() { t1 = t1.Down; n++ })() {
+		for t1 := getinargx(t).Type; t1 != nil; t1 = t1.Down {
 			ot = dsymptr(s, ot, dtypesym(t1.Type), 0)
+			n++
 		}
-		for t1 = getoutargx(t).Type; t1 != nil; (func() { t1 = t1.Down; n++ })() {
+		for t1 := getoutargx(t).Type; t1 != nil; t1 = t1.Down {
 			ot = dsymptr(s, ot, dtypesym(t1.Type), 0)
+			n++
 		}
 
 	case TINTER:
 		m := imethods(t)
-		n = 0
+		n := 0
 		for a := m; a != nil; a = a.link {
 			dtypesym(a.type_)
 			n++
@@ -1161,9 +1167,9 @@ ok:
 		// ../../runtime/type.go:/StructType
 	// for security, only the exported fields.
 	case TSTRUCT:
-		n = 0
+		n := 0
 
-		for t1 = t.Type; t1 != nil; t1 = t1.Down {
+		for t1 := t.Type; t1 != nil; t1 = t1.Down {
 			dtypesym(t1.Type)
 			n++
 		}
@@ -1173,7 +1179,7 @@ ok:
 		ot = dsymptr(s, ot, s, ot+Widthptr+2*Widthint)
 		ot = duintxx(s, ot, uint64(n), Widthint)
 		ot = duintxx(s, ot, uint64(n), Widthint)
-		for t1 = t.Type; t1 != nil; t1 = t1.Down {
+		for t1 := t.Type; t1 != nil; t1 = t1.Down {
 			// ../../runtime/type.go:/structField
 			if t1.Sym != nil && t1.Embedded == 0 {
 				ot = dgostringptr(s, ot, t1.Sym.Name)
@@ -1476,11 +1482,9 @@ func proggenskip(g *ProgGen, off int64, v int64) {
 
 // Emit insArray instruction.
 func proggenarray(g *ProgGen, len int64) {
-	var i int32
-
 	proggendataflush(g)
 	proggenemit(g, obj.InsArray)
-	for i = 0; i < int32(Widthptr); (func() { i++; len >>= 8 })() {
+	for i := int32(0); i < int32(Widthptr); i, len = i+1, len>>8 {
 		proggenemit(g, uint8(len))
 	}
 }
