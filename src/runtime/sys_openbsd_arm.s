@@ -40,7 +40,7 @@ TEXT runtime·open(SB),NOSPLIT,$-4
 	MOVW	R0, ret+12(FP)
 	RET
 
-TEXT runtime·close(SB),NOSPLIT,$-4
+TEXT runtime·closefd(SB),NOSPLIT,$-4
 	MOVW	path+0(FP), R0		// arg 1 - path
 	MOVW	$6, R12			// sys_close
 	SWI	$0
@@ -373,6 +373,9 @@ TEXT runtime·casp1(SB),NOSPLIT,$0
 
 TEXT runtime·cas(SB),NOSPLIT,$0
 	B	runtime·armcas(SB)
+
+TEXT ·publicationBarrier(SB),NOSPLIT,$-4-0
+	B	runtime·armPublicationBarrier(SB)
 
 // TODO(jsing): Implement.
 TEXT runtime·read_tls_fallback(SB),NOSPLIT,$-4

@@ -528,7 +528,7 @@ func TestMultiConsumer(t *testing.T) {
 func TestShrinkStackDuringBlockedSend(t *testing.T) {
 	// make sure that channel operations still work when we are
 	// blocked on a channel send and we shrink the stack.
-	// NOTE: this test probably won't fail unless stack1.go:StackDebug
+	// NOTE: this test probably won't fail unless stack1.go:stackDebug
 	// is set to >= 1.
 	const n = 10
 	c := make(chan int)
@@ -898,6 +898,8 @@ func BenchmarkChanPopular(b *testing.B) {
 	const n = 1000
 	c := make(chan bool)
 	var a []chan bool
+	var wg sync.WaitGroup
+	wg.Add(n)
 	for j := 0; j < n; j++ {
 		d := make(chan bool)
 		a = append(a, d)
@@ -908,6 +910,7 @@ func BenchmarkChanPopular(b *testing.B) {
 				case <-d:
 				}
 			}
+			wg.Done()
 		}()
 	}
 	for i := 0; i < b.N; i++ {
@@ -915,4 +918,5 @@ func BenchmarkChanPopular(b *testing.B) {
 			d <- true
 		}
 	}
+	wg.Wait()
 }

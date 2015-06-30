@@ -28,7 +28,7 @@ TEXT runtime·open(SB),NOSPLIT,$0
 	MOVW	R0, ret+12(FP)
 	RET
 
-TEXT runtime·close(SB),NOSPLIT,$0
+TEXT runtime·closefd(SB),NOSPLIT,$0
 	MOVW	fd+0(FP), R0
 	NACL_SYSCALL(SYS_close)
 	MOVW	R0, ret+4(FP)
@@ -322,6 +322,10 @@ TEXT runtime·casp1(SB),NOSPLIT,$0
 //		return 0;
 TEXT runtime·cas(SB),NOSPLIT,$0
 	B runtime·armcas(SB)
+
+// Likewise, this is only valid for ARMv7+, but that's okay.
+TEXT ·publicationBarrier(SB),NOSPLIT,$-4-0
+	B	runtime·armPublicationBarrier(SB)
 
 TEXT runtime·read_tls_fallback(SB),NOSPLIT,$-4
 	WORD $0xe7fedef0 // NACL_INSTR_ARM_ABORT_NOW (UDF #0xEDE0)

@@ -96,9 +96,6 @@ const (
 
 	// sentinel bucket ID for iterator checks
 	noCheck = 1<<(8*ptrSize) - 1
-
-	// trigger a garbage collection at every alloc called from this code
-	checkgc = false
 )
 
 // A header for a Go map.
@@ -236,6 +233,9 @@ func makemap(t *maptype, hint int64, h *hmap, bucket unsafe.Pointer) *hmap {
 		throw("need padding in bucket (value)")
 	}
 
+	// make sure zero of element type is available.
+	mapzero(t.elem)
+
 	// find size parameter which will hold the requested # of elements
 	B := uint8(0)
 	for ; hint > bucketCnt && float32(hint) > loadFactor*float32(uintptr(1)<<B); B++ {
@@ -246,16 +246,10 @@ func makemap(t *maptype, hint int64, h *hmap, bucket unsafe.Pointer) *hmap {
 	// If hint is large zeroing this memory could take a while.
 	buckets := bucket
 	if B != 0 {
-		if checkgc {
-			memstats.next_gc = memstats.heap_alloc
-		}
 		buckets = newarray(t.bucket, uintptr(1)<<B)
 	}
 
 	// initialize Hmap
-	if checkgc {
-		memstats.next_gc = memstats.heap_alloc
-	}
 	if h == nil {
 		h = (*hmap)(newobject(t.hmap))
 	}
@@ -430,9 +424,6 @@ func mapassign1(t *maptype, h *hmap, key unsafe.Pointer, val unsafe.Pointer) {
 	hash := alg.hash(key, uintptr(h.hash0))
 
 	if h.buckets == nil {
-		if checkgc {
-			memstats.next_gc = memstats.heap_alloc
-		}
 		h.buckets = newarray(t.bucket, 1)
 	}
 
@@ -493,9 +484,6 @@ again:
 
 	if inserti == nil {
 		// all current buckets are full, allocate a new one.
-		if checkgc {
-			memstats.next_gc = memstats.heap_alloc
-		}
 		newb := (*bmap)(newobject(t.bucket))
 		h.setoverflow(t, b, newb)
 		inserti = &newb.tophash[0]
@@ -505,17 +493,11 @@ again:
 
 	// store new key/value at insert position
 	if t.indirectkey {
-		if checkgc {
-			memstats.next_gc = memstats.heap_alloc
-		}
 		kmem := newobject(t.key)
 		*(*unsafe.Pointer)(insertk) = kmem
 		insertk = kmem
 	}
 	if t.indirectvalue {
-		if checkgc {
-			memstats.next_gc = memstats.heap_alloc
-		}
 		vmem := newobject(t.elem)
 		*(*unsafe.Pointer)(insertv) = vmem
 		insertv = vmem
@@ -776,9 +758,6 @@ func hashGrow(t *maptype, h *hmap) {
 		throw("evacuation not done in time")
 	}
 	oldbuckets := h.buckets
-	if checkgc {
-		memstats.next_gc = memstats.heap_alloc
-	}
 	newbuckets := newarray(t.bucket, uintptr(1)<<(h.B+1))
 	flags := h.flags &^ (iterator | oldIterator)
 	if h.flags&iterator != 0 {
@@ -879,9 +858,6 @@ func evacuate(t *maptype, h *hmap, oldbucket uintptr) {
 				if (hash & newbit) == 0 {
 					b.tophash[i] = evacuatedX
 					if xi == bucketCnt {
-						if checkgc {
-							memstats.next_gc = memstats.heap_alloc
-						}
 						newx := (*bmap)(newobject(t.bucket))
 						h.setoverflow(t, x, newx)
 						x = newx
@@ -906,9 +882,6 @@ func evacuate(t *maptype, h *hmap, oldbucket uintptr) {
 				} else {
 					b.tophash[i] = evacuatedY
 					if yi == bucketCnt {
-						if checkgc {
-							memstats.next_gc = memstats.heap_alloc
-						}
 						newy := (*bmap)(newobject(t.bucket))
 						h.setoverflow(t, y, newy)
 						y = newy
@@ -1019,4 +992,61 @@ func reflect_maplen(h *hmap) int {
 //go:linkname reflect_ismapkey reflect.ismapkey
 func reflect_ismapkey(t *_type) bool {
 	return ismapkey(t)
+}
+
+var zerobuf struct {
+	lock mutex
+	p    *byte
+	size uintptr
+}
+
+var zerotiny [1024]byte
+
+// mapzero ensures that t.zero points at a zero value for type t.
+// Types known to the compiler are in read-only memory and all point
+// to a single zero in the bss of a large enough size.
+// Types allocated by package reflect are in writable memory and
+// start out with zero set to nil; we initialize those on demand.
+func mapzero(t *_type) {
+	// On ARM, atomicloadp is implemented as xadd(p, 0),
+	// so we cannot use atomicloadp on read-only memory.
+	// Check whether the pointer is in the heap; if not, it's not writable
+	// so the zero value must already be set.
+	if GOARCH == "arm" && !inheap(uintptr(unsafe.Pointer(t))) {
+		if t.zero == nil {
+			print("runtime: map element ", *t._string, " missing zero value\n")
+			throw("mapzero")
+		}
+		return
+	}
+
+	// Already done?
+	// Check without lock, so must use atomicload to sync with atomicstore in allocation case below.
+	if atomicloadp(unsafe.Pointer(&t.zero)) != nil {
+		return
+	}
+
+	// Small enough for static buffer?
+	if t.size <= uintptr(len(zerotiny)) {
+		atomicstorep(unsafe.Pointer(&t.zero), unsafe.Pointer(&zerotiny[0]))
+		return
+	}
+
+	// Use allocated buffer.
+	lock(&zerobuf.lock)
+	if zerobuf.size < t.size {
+		if zerobuf.size == 0 {
+			zerobuf.size = 4 * 1024
+		}
+		for zerobuf.size < t.size {
+			zerobuf.size *= 2
+			if zerobuf.size == 0 {
+				// need >2GB zero on 32-bit machine
+				throw("map element too large")
+			}
+		}
+		zerobuf.p = (*byte)(persistentalloc(zerobuf.size, 64, &memstats.other_sys))
+	}
+	atomicstorep(unsafe.Pointer(&t.zero), unsafe.Pointer(zerobuf.p))
+	unlock(&zerobuf.lock)
 }

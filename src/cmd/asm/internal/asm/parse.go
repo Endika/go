@@ -54,7 +54,14 @@ func NewParser(ctxt *obj.Link, ar *arch.Arch, lexer lex.TokenReader) *Parser {
 	}
 }
 
+// panicOnError is enable when testing to abort execution on the first error
+// and turn it into a recoverable panic.
+var panicOnError bool
+
 func (p *Parser) errorf(format string, args ...interface{}) {
+	if panicOnError {
+		panic(fmt.Errorf(format, args...))
+	}
 	if p.histLineNum == p.errorLine {
 		// Only one error per line.
 		return
@@ -311,10 +318,8 @@ func (p *Parser) operand(a *obj.Addr) bool {
 			a.Reg = r1
 			if r2 != 0 {
 				// Form is R1:R2. It is on RHS and the second register
-				// needs to go into the LHS. This is a horrible hack. TODO.
-				// TODO: If we never see this again, can delete Addr.Reg2.
-				panic("cannot happen")
-				a.Reg2 = r2
+				// needs to go into the LHS.
+				panic("cannot happen (Addr.Reg2)")
 			}
 		}
 		// fmt.Printf("REG %s\n", obj.Dconv(&emptyProg, 0, a))
@@ -461,7 +466,7 @@ func (p *Parser) register(name string, prefix rune) (r1, r2 int16, scale int8, o
 		char := p.arch.Thechar
 		switch p.next().ScanToken {
 		case ',':
-			if char != '5' {
+			if char != '5' && char != '7' {
 				p.errorf("illegal register pair syntax")
 				return
 			}
@@ -629,15 +634,17 @@ func (p *Parser) registerIndirect(a *obj.Addr, prefix rune) {
 	a.Reg = r1
 	if r2 != 0 {
 		// TODO: Consistency in the encoding would be nice here.
-		if p.arch.Thechar == '5' {
-			// Special form for ARM: destination register pair (R1, R2).
+		if p.arch.Thechar == '5' || p.arch.Thechar == '7' {
+			// Special form
+			// ARM: destination register pair (R1, R2).
+			// ARM64: register pair (R1, R2) for LDP/STP.
 			if prefix != 0 || scale != 0 {
 				p.errorf("illegal address mode for register pair")
 				return
 			}
 			a.Type = obj.TYPE_REGREG
 			a.Offset = int64(r2)
-			// Nothing may follow; this is always a pure destination.
+			// Nothing may follow
 			return
 		}
 		if p.arch.Thechar == '9' {
@@ -736,7 +743,7 @@ func (p *Parser) registerNumber(name string) uint16 {
 }
 
 // Note: There are two changes in the expression handling here
-// compared to the old yacc/C implemenatations. Neither has
+// compared to the old yacc/C implementations. Neither has
 // much practical consequence because the expressions we
 // see in assembly code are simple, but for the record:
 //
@@ -797,30 +804,43 @@ func (p *Parser) term() uint64 {
 			value *= p.factor()
 		case '/':
 			p.next()
-			if value&(1<<63) != 0 {
-				p.errorf("divide with high bit set")
+			if int64(value) < 0 {
+				p.errorf("divide of value with high bit set")
 			}
-			value /= p.factor()
+			divisor := p.factor()
+			if divisor == 0 {
+				p.errorf("division by zero")
+			} else {
+				value /= divisor
+			}
 		case '%':
 			p.next()
-			value %= p.factor()
+			divisor := p.factor()
+			if int64(value) < 0 {
+				p.errorf("modulo of value with high bit set")
+			}
+			if divisor == 0 {
+				p.errorf("modulo by zero")
+			} else {
+				value %= divisor
+			}
 		case lex.LSH:
 			p.next()
 			shift := p.factor()
 			if int64(shift) < 0 {
-				p.errorf("negative left shift %d", shift)
+				p.errorf("negative left shift count")
 			}
 			return value << shift
 		case lex.RSH:
 			p.next()
 			shift := p.term()
-			if shift < 0 {
-				p.errorf("negative right shift %d", shift)
+			if int64(shift) < 0 {
+				p.errorf("negative right shift count")
 			}
-			if shift > 0 && value&(1<<63) != 0 {
-				p.errorf("right shift with high bit set")
+			if int64(value) < 0 {
+				p.errorf("right shift of value with high bit set")
 			}
-			value >>= uint(shift)
+			value >>= shift
 		case '&':
 			p.next()
 			value &= p.factor()

@@ -45,9 +45,10 @@ var reqTests = []reqTest{
 		&Request{
 			Method: "GET",
 			URL: &url.URL{
-				Scheme: "http",
-				Host:   "www.techcrunch.com",
-				Path:   "/",
+				Scheme:  "http",
+				Host:    "www.techcrunch.com",
+				Path:    "/",
+				RawPath: "/",
 			},
 			Proto:      "HTTP/1.1",
 			ProtoMajor: 1,
@@ -82,7 +83,8 @@ var reqTests = []reqTest{
 		&Request{
 			Method: "GET",
 			URL: &url.URL{
-				Path: "/",
+				Path:    "/",
+				RawPath: "/",
 			},
 			Proto:         "HTTP/1.1",
 			ProtoMajor:    1,
@@ -108,7 +110,8 @@ var reqTests = []reqTest{
 		&Request{
 			Method: "GET",
 			URL: &url.URL{
-				Path: "//user@host/is/actually/a/path/",
+				Path:    "//user@host/is/actually/a/path/",
+				RawPath: "//user@host/is/actually/a/path/",
 			},
 			Proto:         "HTTP/1.1",
 			ProtoMajor:    1,
@@ -158,7 +161,8 @@ var reqTests = []reqTest{
 		&Request{
 			Method: "POST",
 			URL: &url.URL{
-				Path: "/",
+				Path:    "/",
+				RawPath: "/",
 			},
 			TransferEncoding: []string{"chunked"},
 			Proto:            "HTTP/1.1",
@@ -232,7 +236,8 @@ var reqTests = []reqTest{
 		&Request{
 			Method: "CONNECT",
 			URL: &url.URL{
-				Path: "/_goRPC_",
+				Path:    "/_goRPC_",
+				RawPath: "/_goRPC_",
 			},
 			Proto:         "HTTP/1.1",
 			ProtoMajor:    1,
@@ -303,7 +308,8 @@ var reqTests = []reqTest{
 		&Request{
 			Method: "GET",
 			URL: &url.URL{
-				Path: "/",
+				Path:    "/",
+				RawPath: "/",
 			},
 			Header: Header{
 				// This wasn't removed from Go 1.0 to
@@ -354,5 +360,13 @@ func TestReadRequest(t *testing.T) {
 		if !reflect.DeepEqual(tt.Trailer, req.Trailer) {
 			t.Errorf("%s: Trailers differ.\n got: %v\nwant: %v", testName, req.Trailer, tt.Trailer)
 		}
+	}
+}
+
+func TestReadRequest_BadConnectHost(t *testing.T) {
+	data := []byte("CONNECT []%20%48%54%54%50%2f%31%2e%31%0a%4d%79%48%65%61%64%65%72%3a%20%31%32%33%0a%0a HTTP/1.0\n\n")
+	r, err := ReadRequest(bufio.NewReader(bytes.NewReader(data)))
+	if err == nil {
+		t.Fatal("Got unexpected request = %#v", r)
 	}
 }

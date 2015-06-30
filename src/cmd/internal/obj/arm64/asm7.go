@@ -258,17 +258,19 @@ var optab = []Optab{
 	{AWORD, C_NONE, C_NONE, C_LEXT, 14, 4, 0, 0, 0},
 	{AWORD, C_NONE, C_NONE, C_ADDR, 14, 4, 0, 0, 0},
 	{AMOVW, C_VCON, C_NONE, C_REG, 12, 4, 0, LFROM, 0},
+	{AMOVW, C_VCONADDR, C_NONE, C_REG, 68, 8, 0, 0, 0},
 	{AMOVD, C_VCON, C_NONE, C_REG, 12, 4, 0, LFROM, 0},
-	{AMOVB, C_REG, C_NONE, C_ADDR, 64, 8, 0, LTO, 0},
-	{AMOVBU, C_REG, C_NONE, C_ADDR, 64, 8, 0, LTO, 0},
-	{AMOVH, C_REG, C_NONE, C_ADDR, 64, 8, 0, LTO, 0},
-	{AMOVW, C_REG, C_NONE, C_ADDR, 64, 8, 0, LTO, 0},
-	{AMOVD, C_REG, C_NONE, C_ADDR, 64, 8, 0, LTO, 0},
-	{AMOVB, C_ADDR, C_NONE, C_REG, 65, 8, 0, LFROM, 0},
-	{AMOVBU, C_ADDR, C_NONE, C_REG, 65, 8, 0, LFROM, 0},
-	{AMOVH, C_ADDR, C_NONE, C_REG, 65, 8, 0, LFROM, 0},
-	{AMOVW, C_ADDR, C_NONE, C_REG, 65, 8, 0, LFROM, 0},
-	{AMOVD, C_ADDR, C_NONE, C_REG, 65, 8, 0, LFROM, 0},
+	{AMOVD, C_VCONADDR, C_NONE, C_REG, 68, 8, 0, 0, 0},
+	{AMOVB, C_REG, C_NONE, C_ADDR, 64, 12, 0, 0, 0},
+	{AMOVBU, C_REG, C_NONE, C_ADDR, 64, 12, 0, 0, 0},
+	{AMOVH, C_REG, C_NONE, C_ADDR, 64, 12, 0, 0, 0},
+	{AMOVW, C_REG, C_NONE, C_ADDR, 64, 12, 0, 0, 0},
+	{AMOVD, C_REG, C_NONE, C_ADDR, 64, 12, 0, 0, 0},
+	{AMOVB, C_ADDR, C_NONE, C_REG, 65, 12, 0, 0, 0},
+	{AMOVBU, C_ADDR, C_NONE, C_REG, 65, 12, 0, 0, 0},
+	{AMOVH, C_ADDR, C_NONE, C_REG, 65, 12, 0, 0, 0},
+	{AMOVW, C_ADDR, C_NONE, C_REG, 65, 12, 0, 0, 0},
+	{AMOVD, C_ADDR, C_NONE, C_REG, 65, 12, 0, 0, 0},
 	{AMUL, C_REG, C_REG, C_REG, 15, 4, 0, 0, 0},
 	{AMUL, C_REG, C_NONE, C_REG, 15, 4, 0, 0, 0},
 	{AMADD, C_REG, C_REG, C_REG, 15, 4, 0, 0, 0},
@@ -447,10 +449,10 @@ var optab = []Optab{
 	{AFMOVS, C_LOREG, C_NONE, C_FREG, 31, 8, 0, LFROM, 0},
 	{AFMOVD, C_LAUTO, C_NONE, C_FREG, 31, 8, REGSP, LFROM, 0},
 	{AFMOVD, C_LOREG, C_NONE, C_FREG, 31, 8, 0, LFROM, 0},
-	{AFMOVS, C_FREG, C_NONE, C_ADDR, 64, 8, 0, LTO, 0},
-	{AFMOVS, C_ADDR, C_NONE, C_FREG, 65, 8, 0, LFROM, 0},
-	{AFMOVD, C_FREG, C_NONE, C_ADDR, 64, 8, 0, LTO, 0},
-	{AFMOVD, C_ADDR, C_NONE, C_FREG, 65, 8, 0, LFROM, 0},
+	{AFMOVS, C_FREG, C_NONE, C_ADDR, 64, 12, 0, 0, 0},
+	{AFMOVS, C_ADDR, C_NONE, C_FREG, 65, 12, 0, 0, 0},
+	{AFMOVD, C_FREG, C_NONE, C_ADDR, 64, 12, 0, 0, 0},
+	{AFMOVD, C_ADDR, C_NONE, C_FREG, 65, 12, 0, 0, 0},
 	{AFADDS, C_FREG, C_NONE, C_FREG, 54, 4, 0, 0, 0},
 	{AFADDS, C_FREG, C_FREG, C_FREG, 54, 4, 0, 0, 0},
 	{AFADDS, C_FCON, C_NONE, C_FREG, 54, 4, 0, 0, 0},
@@ -829,7 +831,7 @@ func regoff(ctxt *obj.Link, a *obj.Addr) uint32 {
 
 func ispcdisp(v int32) int {
 	/* pc-relative addressing will reach? */
-	return bool2int(v >= -0xfffff && v <= 0xfffff && (v&3) == 0)
+	return obj.Bool2int(v >= -0xfffff && v <= 0xfffff && (v&3) == 0)
 }
 
 func isaddcon(v int64) int {
@@ -840,14 +842,14 @@ func isaddcon(v int64) int {
 	if (v & 0xFFF) == 0 {
 		v >>= 12
 	}
-	return bool2int(v <= 0xFFF)
+	return obj.Bool2int(v <= 0xFFF)
 }
 
 func isbitcon(v uint64) int {
 	/*  fancy bimm32 or bimm64? */
 	// TODO(aram):
 	return 0
-	// return bool2int(findmask(v) != nil || (v>>32) == 0 && findmask(v|(v<<32)) != nil)
+	// return obj.Bool2int(findmask(v) != nil || (v>>32) == 0 && findmask(v|(v<<32)) != nil)
 }
 
 func autoclass(l int64) int {
@@ -1176,12 +1178,7 @@ func cmp(a int, b int) bool {
 		}
 
 	case C_VCON:
-		if b == C_VCONADDR {
-			return true
-		} else {
-			return cmp(C_LCON, b)
-		}
-		fallthrough
+		return cmp(C_LCON, b)
 
 	case C_LACON:
 		if b == C_AACON {
@@ -1595,8 +1592,7 @@ func buildop(ctxt *obj.Link) {
 		case ATBZ:
 			oprange[ATBNZ] = t
 
-		case AADR,
-			AADRP:
+		case AADR, AADRP:
 			break
 
 		case ACLREX:
@@ -1670,8 +1666,7 @@ func buildop(ctxt *obj.Link) {
 		case AFCSELD:
 			oprange[AFCSELS] = t
 
-		case AFMOVS,
-			AFMOVD:
+		case AFMOVS, AFMOVD:
 			break
 
 		case AFCVTZSD:
@@ -1698,16 +1693,14 @@ func buildop(ctxt *obj.Link) {
 			oprange[AIC] = t
 			oprange[ATLBI] = t
 
-		case ASYSL,
-			AHINT:
+		case ASYSL, AHINT:
 			break
 
 		case ADMB:
 			oprange[ADSB] = t
 			oprange[AISB] = t
 
-		case AMRS,
-			AMSR:
+		case AMRS, AMSR:
 			break
 
 		case ALDAR:
@@ -2047,7 +2040,7 @@ func asmout(ctxt *obj.Link, p *obj.Prog, o *Optab, out []uint32) {
 		rt := int(p.To.Reg)
 		var r int
 		var ra int
-		if p.From3.Type == obj.TYPE_REG {
+		if p.From3Type() == obj.TYPE_REG {
 			r = int(p.From3.Reg)
 			ra = int(p.Reg)
 			if ra == 0 {
@@ -2098,7 +2091,7 @@ func asmout(ctxt *obj.Link, p *obj.Prog, o *Optab, out []uint32) {
 		r := int(p.Reg)
 		var rf int
 		if r != 0 {
-			if p.From3.Type == obj.TYPE_NONE {
+			if p.From3Type() == obj.TYPE_NONE {
 				/* CINC/CINV/CNEG */
 				rf = r
 
@@ -2108,7 +2101,7 @@ func asmout(ctxt *obj.Link, p *obj.Prog, o *Optab, out []uint32) {
 			}
 		} else {
 			/* CSET */
-			if p.From3.Type != obj.TYPE_NONE {
+			if p.From3Type() != obj.TYPE_NONE {
 				ctxt.Diag("invalid combination\n%v", p)
 			}
 			rf = REGZERO
@@ -2117,7 +2110,7 @@ func asmout(ctxt *obj.Link, p *obj.Prog, o *Optab, out []uint32) {
 		}
 
 		rt := int(p.To.Reg)
-		o1 |= (uint32(r&31) << 16) | (uint32(cond) << 12) | (uint32(rf&31) << 5) | uint32(rt&31)
+		o1 |= (uint32(rf&31) << 16) | (uint32(cond&31) << 12) | (uint32(r&31) << 5) | uint32(rt&31)
 
 	case 19: /* CCMN cond, (Rm|uimm5),Rn, uimm4 -> ccmn Rn,Rm,uimm4,cond */
 		nzcv := int(p.To.Offset)
@@ -2195,7 +2188,7 @@ func asmout(ctxt *obj.Link, p *obj.Prog, o *Optab, out []uint32) {
 	case 24: /* mov/mvn Rs,Rd -> add $0,Rs,Rd or orr Rs,ZR,Rd */
 		rf := int(p.From.Reg)
 		rt := int(p.To.Reg)
-		s := bool2int(rf == REGSP || rt == REGSP)
+		s := obj.Bool2int(rf == REGSP || rt == REGSP)
 		if p.As == AMVN || p.As == AMVNW {
 			if s != 0 {
 				ctxt.Diag("illegal SP reference\n%v", p)
@@ -2355,7 +2348,7 @@ func asmout(ctxt *obj.Link, p *obj.Prog, o *Optab, out []uint32) {
 			ctxt.Diag("requires uimm16\n%v", p)
 		}
 		s := 0
-		if p.From3.Type != obj.TYPE_NONE {
+		if p.From3Type() != obj.TYPE_NONE {
 			if p.From3.Type != obj.TYPE_CONST {
 				ctxt.Diag("missing bit position\n%v", p)
 			}
@@ -2518,24 +2511,19 @@ func asmout(ctxt *obj.Link, p *obj.Prog, o *Optab, out []uint32) {
 			as = AMOVWU /* clearer in disassembly */
 		}
 		switch as {
-		case AMOVB,
-			ASXTB:
+		case AMOVB, ASXTB:
 			o1 = opbfm(ctxt, ASBFM, 0, 7, rf, rt)
 
-		case AMOVH,
-			ASXTH:
+		case AMOVH, ASXTH:
 			o1 = opbfm(ctxt, ASBFM, 0, 15, rf, rt)
 
-		case AMOVW,
-			ASXTW:
+		case AMOVW, ASXTW:
 			o1 = opbfm(ctxt, ASBFM, 0, 31, rf, rt)
 
-		case AMOVBU,
-			AUXTB:
+		case AMOVBU, AUXTB:
 			o1 = opbfm(ctxt, AUBFM, 0, 7, rf, rt)
 
-		case AMOVHU,
-			AUXTH:
+		case AMOVHU, AUXTH:
 			o1 = opbfm(ctxt, AUBFM, 0, 15, rf, rt)
 
 		case AMOVWU:
@@ -2668,8 +2656,9 @@ func asmout(ctxt *obj.Link, p *obj.Prog, o *Optab, out []uint32) {
 			ctxt.Diag("implausible condition\n%v", p)
 		}
 		rf := int(p.Reg)
-		if p.From3.Reg < REG_F0 || p.From3.Reg > REG_F31 {
+		if p.From3 == nil || p.From3.Reg < REG_F0 || p.From3.Reg > REG_F31 {
 			ctxt.Diag("illegal FCCMP\n%v", p)
+			break
 		}
 		rt := int(p.From3.Reg)
 		o1 |= uint32(rf&31)<<16 | uint32(cond)<<12 | uint32(rt&31)<<5 | uint32(nzcv)
@@ -2689,8 +2678,8 @@ func asmout(ctxt *obj.Link, p *obj.Prog, o *Optab, out []uint32) {
 	case 59: /* stxr/stlxr */
 		o1 = opstore(ctxt, int(p.As))
 
-		if p.To2.Type != obj.TYPE_NONE {
-			o1 |= uint32(p.To2.Reg&31) << 16
+		if p.RegTo2 != obj.REG_NONE {
+			o1 |= uint32(p.RegTo2&31) << 16
 		} else {
 			o1 |= 0x1F << 16
 		}
@@ -2733,21 +2722,27 @@ func asmout(ctxt *obj.Link, p *obj.Prog, o *Optab, out []uint32) {
 		}
 
 		/* reloc ops */
-	case 64: /* movT R,addr */
-		o1 = omovlit(ctxt, AMOVD, p, &p.To, REGTMP)
+	case 64: /* movT R,addr -> adrp + add + movT R, (REGTMP) */
+		o1 = ADR(1, 0, REGTMP)
+		o2 = opirr(ctxt, AADD) | REGTMP&31<<5 | REGTMP&31
+		rel := obj.Addrel(ctxt.Cursym)
+		rel.Off = int32(ctxt.Pc)
+		rel.Siz = 8
+		rel.Sym = p.To.Sym
+		rel.Add = p.To.Offset
+		rel.Type = obj.R_ADDRARM64
+		o3 = olsr12u(ctxt, int32(opstr12(ctxt, int(p.As))), 0, REGTMP, int(p.From.Reg))
 
-		if !(o1 != 0) {
-			break
-		}
-		o2 = olsr12u(ctxt, int32(opstr12(ctxt, int(p.As))), 0, REGTMP, int(p.From.Reg))
-
-	case 65: /* movT addr,R */
-		o1 = omovlit(ctxt, AMOVD, p, &p.From, REGTMP)
-
-		if !(o1 != 0) {
-			break
-		}
-		o2 = olsr12u(ctxt, int32(opldr12(ctxt, int(p.As))), 0, REGTMP, int(p.To.Reg))
+	case 65: /* movT addr,R -> adrp + add + movT (REGTMP), R */
+		o1 = ADR(1, 0, REGTMP)
+		o2 = opirr(ctxt, AADD) | REGTMP&31<<5 | REGTMP&31
+		rel := obj.Addrel(ctxt.Cursym)
+		rel.Off = int32(ctxt.Pc)
+		rel.Siz = 8
+		rel.Sym = p.From.Sym
+		rel.Add = p.From.Offset
+		rel.Type = obj.R_ADDRARM64
+		o3 = olsr12u(ctxt, int32(opldr12(ctxt, int(p.As))), 0, REGTMP, int(p.To.Reg))
 
 	case 66: /* ldp O(R)!, (r1, r2); ldp (R)O!, (r1, r2) */
 		v := int32(p.From.Offset)
@@ -2775,6 +2770,19 @@ func asmout(ctxt *obj.Link, p *obj.Prog, o *Optab, out []uint32) {
 			o1 |= 3 << 23
 		}
 		o1 |= uint32(int64(2<<30|5<<27|((uint32(v)/8)&0x7f)<<15) | p.From.Offset<<10 | int64(uint32(p.To.Reg&31)<<5) | int64(p.From.Reg&31))
+
+	case 68: /* movT $vconaddr(SB), reg -> adrp + add + reloc */
+		if p.As == AMOVW {
+			ctxt.Diag("invalid load of 32-bit address: %v", p)
+		}
+		o1 = ADR(1, 0, uint32(p.To.Reg))
+		o2 = opirr(ctxt, AADD) | uint32(p.To.Reg&31)<<5 | uint32(p.To.Reg&31)
+		rel := obj.Addrel(ctxt.Cursym)
+		rel.Off = int32(ctxt.Pc)
+		rel.Siz = 8
+		rel.Sym = p.From.Sym
+		rel.Add = p.From.Offset
+		rel.Type = obj.R_ADDRARM64
 
 	// This is supposed to be something that stops execution.
 	// It's not supposed to be reached, ever, but if it is, we'd
@@ -2814,20 +2822,16 @@ func oprrr(ctxt *obj.Link, a int) uint32 {
 	case AADCSW:
 		return S32 | 0<<30 | 1<<29 | 0xd0<<21 | 0<<10
 
-	case ANGC,
-		ASBC:
+	case ANGC, ASBC:
 		return S64 | 1<<30 | 0<<29 | 0xd0<<21 | 0<<10
 
-	case ANGCS,
-		ASBCS:
+	case ANGCS, ASBCS:
 		return S64 | 1<<30 | 1<<29 | 0xd0<<21 | 0<<10
 
-	case ANGCW,
-		ASBCW:
+	case ANGCW, ASBCW:
 		return S32 | 1<<30 | 0<<29 | 0xd0<<21 | 0<<10
 
-	case ANGCSW,
-		ASBCSW:
+	case ANGCSW, ASBCSW:
 		return S32 | 1<<30 | 1<<29 | 0xd0<<21 | 0<<10
 
 	case AADD:
@@ -2836,12 +2840,10 @@ func oprrr(ctxt *obj.Link, a int) uint32 {
 	case AADDW:
 		return S32 | 0<<30 | 0<<29 | 0x0b<<24 | 0<<22 | 0<<21 | 0<<10
 
-	case ACMN,
-		AADDS:
+	case ACMN, AADDS:
 		return S64 | 0<<30 | 1<<29 | 0x0b<<24 | 0<<22 | 0<<21 | 0<<10
 
-	case ACMNW,
-		AADDSW:
+	case ACMNW, AADDSW:
 		return S32 | 0<<30 | 1<<29 | 0x0b<<24 | 0<<22 | 0<<21 | 0<<10
 
 	case ASUB:
@@ -2850,12 +2852,10 @@ func oprrr(ctxt *obj.Link, a int) uint32 {
 	case ASUBW:
 		return S32 | 1<<30 | 0<<29 | 0x0b<<24 | 0<<22 | 0<<21 | 0<<10
 
-	case ACMP,
-		ASUBS:
+	case ACMP, ASUBS:
 		return S64 | 1<<30 | 1<<29 | 0x0b<<24 | 0<<22 | 0<<21 | 0<<10
 
-	case ACMPW,
-		ASUBSW:
+	case ACMPW, ASUBSW:
 		return S32 | 1<<30 | 1<<29 | 0x0b<<24 | 0<<22 | 0<<21 | 0<<10
 
 	case AAND:
@@ -2864,13 +2864,11 @@ func oprrr(ctxt *obj.Link, a int) uint32 {
 	case AANDW:
 		return S32 | 0<<29 | 0xA<<24
 
-	case AMOVD,
-		AORR:
+	case AMOVD, AORR:
 		return S64 | 1<<29 | 0xA<<24
 
 		//	case AMOVW:
-	case AMOVWU,
-		AORRW:
+	case AMOVWU, AORRW:
 		return S32 | 1<<29 | 0xA<<24
 
 	case AEOR:
@@ -2903,12 +2901,10 @@ func oprrr(ctxt *obj.Link, a int) uint32 {
 	case AEONW:
 		return S32 | 2<<29 | 0xA<<24 | 1<<21
 
-	case AMVN,
-		AORN:
+	case AMVN, AORN:
 		return S64 | 1<<29 | 0xA<<24 | 1<<21
 
-	case AMVNW,
-		AORNW:
+	case AMVNW, AORNW:
 		return S32 | 1<<29 | 0xA<<24 | 1<<21
 
 	case AASR:
@@ -2989,44 +2985,34 @@ func oprrr(ctxt *obj.Link, a int) uint32 {
 	case ACSETMW:
 		return S32 | 1<<30 | 0<<29 | 0xD4<<21 | 0<<11 | 0<<10
 
-	case ACINC,
-		ACSINC:
+	case ACINC, ACSINC:
 		return S64 | 0<<30 | 0<<29 | 0xD4<<21 | 0<<11 | 1<<10
 
-	case ACINCW,
-		ACSINCW:
+	case ACINCW, ACSINCW:
 		return S32 | 0<<30 | 0<<29 | 0xD4<<21 | 0<<11 | 1<<10
 
-	case ACINV,
-		ACSINV:
+	case ACINV, ACSINV:
 		return S64 | 1<<30 | 0<<29 | 0xD4<<21 | 0<<11 | 0<<10
 
-	case ACINVW,
-		ACSINVW:
+	case ACINVW, ACSINVW:
 		return S32 | 1<<30 | 0<<29 | 0xD4<<21 | 0<<11 | 0<<10
 
-	case ACNEG,
-		ACSNEG:
+	case ACNEG, ACSNEG:
 		return S64 | 1<<30 | 0<<29 | 0xD4<<21 | 0<<11 | 1<<10
 
-	case ACNEGW,
-		ACSNEGW:
+	case ACNEGW, ACSNEGW:
 		return S32 | 1<<30 | 0<<29 | 0xD4<<21 | 0<<11 | 1<<10
 
-	case AMUL,
-		AMADD:
+	case AMUL, AMADD:
 		return S64 | 0<<29 | 0x1B<<24 | 0<<21 | 0<<15
 
-	case AMULW,
-		AMADDW:
+	case AMULW, AMADDW:
 		return S32 | 0<<29 | 0x1B<<24 | 0<<21 | 0<<15
 
-	case AMNEG,
-		AMSUB:
+	case AMNEG, AMSUB:
 		return S64 | 0<<29 | 0x1B<<24 | 0<<21 | 1<<15
 
-	case AMNEGW,
-		AMSUBW:
+	case AMNEGW, AMSUBW:
 		return S32 | 0<<29 | 0x1B<<24 | 0<<21 | 1<<15
 
 	case AMRS:
@@ -3047,42 +3033,34 @@ func oprrr(ctxt *obj.Link, a int) uint32 {
 	case ANEGSW:
 		return S32 | 1<<30 | 1<<29 | 0xB<<24 | 0<<21
 
-	case AREM,
-		ASDIV:
+	case AREM, ASDIV:
 		return S64 | OPDP2(3)
 
-	case AREMW,
-		ASDIVW:
+	case AREMW, ASDIVW:
 		return S32 | OPDP2(3)
 
-	case ASMULL,
-		ASMADDL:
+	case ASMULL, ASMADDL:
 		return OPDP3(1, 0, 1, 0)
 
-	case ASMNEGL,
-		ASMSUBL:
+	case ASMNEGL, ASMSUBL:
 		return OPDP3(1, 0, 1, 1)
 
 	case ASMULH:
 		return OPDP3(1, 0, 2, 0)
 
-	case AUMULL,
-		AUMADDL:
+	case AUMULL, AUMADDL:
 		return OPDP3(1, 0, 5, 0)
 
-	case AUMNEGL,
-		AUMSUBL:
+	case AUMNEGL, AUMSUBL:
 		return OPDP3(1, 0, 5, 1)
 
 	case AUMULH:
 		return OPDP3(1, 0, 6, 0)
 
-	case AUREM,
-		AUDIV:
+	case AUREM, AUDIV:
 		return S64 | OPDP2(2)
 
-	case AUREMW,
-		AUDIVW:
+	case AUREMW, AUDIVW:
 		return S32 | OPDP2(2)
 
 	case AAESE:
@@ -3356,34 +3334,28 @@ func oprrr(ctxt *obj.Link, a int) uint32 {
 func opirr(ctxt *obj.Link, a int) uint32 {
 	switch a {
 	/* op $addcon, Rn, Rd */
-	case AMOVD,
-		AADD:
+	case AMOVD, AADD:
 		return S64 | 0<<30 | 0<<29 | 0x11<<24
 
-	case ACMN,
-		AADDS:
+	case ACMN, AADDS:
 		return S64 | 0<<30 | 1<<29 | 0x11<<24
 
-	case AMOVW,
-		AADDW:
+	case AMOVW, AADDW:
 		return S32 | 0<<30 | 0<<29 | 0x11<<24
 
-	case ACMNW,
-		AADDSW:
+	case ACMNW, AADDSW:
 		return S32 | 0<<30 | 1<<29 | 0x11<<24
 
 	case ASUB:
 		return S64 | 1<<30 | 0<<29 | 0x11<<24
 
-	case ACMP,
-		ASUBS:
+	case ACMP, ASUBS:
 		return S64 | 1<<30 | 1<<29 | 0x11<<24
 
 	case ASUBW:
 		return S32 | 1<<30 | 0<<29 | 0x11<<24
 
-	case ACMPW,
-		ASUBSW:
+	case ACMPW, ASUBSW:
 		return S32 | 1<<30 | 1<<29 | 0x11<<24
 
 		/* op $imm(SB), Rd; op label, Rd */
@@ -3594,12 +3566,10 @@ func opxrrr(ctxt *obj.Link, a int) uint32 {
 	case AADDW:
 		return S32 | 0<<30 | 0<<29 | 0x0b<<24 | 0<<22 | 1<<21 | LSL0_32
 
-	case ACMN,
-		AADDS:
+	case ACMN, AADDS:
 		return S64 | 0<<30 | 1<<29 | 0x0b<<24 | 0<<22 | 1<<21 | LSL0_64
 
-	case ACMNW,
-		AADDSW:
+	case ACMNW, AADDSW:
 		return S32 | 0<<30 | 1<<29 | 0x0b<<24 | 0<<22 | 1<<21 | LSL0_32
 
 	case ASUB:
@@ -3608,12 +3578,10 @@ func opxrrr(ctxt *obj.Link, a int) uint32 {
 	case ASUBW:
 		return S32 | 1<<30 | 0<<29 | 0x0b<<24 | 0<<22 | 1<<21 | LSL0_32
 
-	case ACMP,
-		ASUBS:
+	case ACMP, ASUBS:
 		return S64 | 1<<30 | 1<<29 | 0x0b<<24 | 0<<22 | 1<<21 | LSL0_64
 
-	case ACMPW,
-		ASUBSW:
+	case ACMPW, ASUBSW:
 		return S32 | 1<<30 | 1<<29 | 0x0b<<24 | 0<<22 | 1<<21 | LSL0_32
 	}
 
@@ -4109,9 +4077,7 @@ func omovlit(ctxt *obj.Link, as int, p *obj.Prog, a *obj.Addr, dr int) uint32 {
 				w = 2 /* sign extend */
 			}
 
-		case AMOVB,
-			AMOVH,
-			AMOVW:
+		case AMOVB, AMOVH, AMOVW:
 			w = 2 /* 32 bit, sign-extended to 64 */
 			break
 		}
@@ -4171,16 +4137,13 @@ func movesize(a int) int {
 	case AMOVD:
 		return 3
 
-	case AMOVW,
-		AMOVWU:
+	case AMOVW, AMOVWU:
 		return 2
 
-	case AMOVH,
-		AMOVHU:
+	case AMOVH, AMOVHU:
 		return 1
 
-	case AMOVB,
-		AMOVBU:
+	case AMOVB, AMOVBU:
 		return 0
 
 	case AFMOVS:

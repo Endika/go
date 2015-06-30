@@ -11,6 +11,7 @@ import (
 	"bufio"
 	"bytes"
 	"fmt"
+	"internal/testenv"
 	"io"
 	"io/ioutil"
 	"log"
@@ -28,10 +29,8 @@ import (
 )
 
 func helperCommand(t *testing.T, s ...string) *exec.Cmd {
-	if runtime.GOOS == "nacl" || (runtime.GOOS == "darwin" && runtime.GOARCH == "arm") {
-		// iOS cannot fork
-		t.Skipf("skipping on %s/%s", runtime.GOOS, runtime.GOARCH)
-	}
+	testenv.MustHaveExec(t)
+
 	cs := []string{"-test.run=TestHelperProcess", "--"}
 	cs = append(cs, s...)
 	cmd := exec.Command(os.Args[0], cs...)
@@ -50,9 +49,7 @@ func TestEcho(t *testing.T) {
 }
 
 func TestCommandRelativeName(t *testing.T) {
-	if runtime.GOOS == "darwin" && runtime.GOARCH == "arm" {
-		t.Skip("skipping on darwin/arm")
-	}
+	testenv.MustHaveExec(t)
 
 	// Run our own binary as a relative path
 	// (e.g. "_test/exec.test") our parent directory.
@@ -425,13 +422,10 @@ func TestExtraFilesFDShuffle(t *testing.T) {
 }
 
 func TestExtraFiles(t *testing.T) {
-	switch runtime.GOOS {
-	case "nacl", "windows":
+	testenv.MustHaveExec(t)
+
+	if runtime.GOOS == "windows" {
 		t.Skipf("skipping test on %q", runtime.GOOS)
-	case "darwin":
-		if runtime.GOARCH == "arm" {
-			t.Skipf("skipping test on %s/%s", runtime.GOOS, runtime.GOARCH)
-		}
 	}
 
 	// Ensure that file descriptors have not already been leaked into

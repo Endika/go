@@ -32,12 +32,14 @@ const (
 // moduledata records information about the layout of the executable
 // image. It is written by the linker. Any changes here must be
 // matched changes to the code in cmd/internal/ld/symtab.go:symtab.
+// moduledata is stored in read-only memory; none of the pointers here
+// are visible to the garbage collector.
 type moduledata struct {
-	pclntable                      []byte
-	ftab                           []functab
-	filetab                        []uint32
-	pclntab, epclntab, findfunctab uintptr
-	minpc, maxpc                   uintptr
+	pclntable    []byte
+	ftab         []functab
+	filetab      []uint32
+	findfunctab  uintptr
+	minpc, maxpc uintptr
 
 	text, etext           uintptr
 	noptrdata, enoptrdata uintptr
@@ -46,10 +48,28 @@ type moduledata struct {
 	noptrbss, enoptrbss   uintptr
 	end, gcdata, gcbss    uintptr
 
-	typelink, etypelink uintptr
+	typelinks []*_type
+
+	modulename   string
+	modulehashes []modulehash
+
+	gcdatamask, gcbssmask bitvector
+
+	next *moduledata
 }
 
-var themoduledata moduledata // linker symbol
+// For each shared library a module links against, the linker creates an entry in the
+// moduledata.modulehashes slice containing the name of the module, the abi hash seen
+// at link time and a pointer to the runtime abi hash. These are checked in
+// moduledataverify1 below.
+type modulehash struct {
+	modulename   string
+	linktimehash string
+	runtimehash  *string
+}
+
+var firstmoduledata moduledata  // linker symbol
+var lastmoduledatap *moduledata // linker symbol
 
 type functab struct {
 	entry   uintptr
@@ -72,63 +92,70 @@ type findfuncbucket struct {
 	subbuckets [16]byte
 }
 
-func symtabinit() {
+func moduledataverify() {
+	for datap := &firstmoduledata; datap != nil; datap = datap.next {
+		moduledataverify1(datap)
+	}
+}
+
+const debugPcln = false
+
+func moduledataverify1(datap *moduledata) {
 	// See golang.org/s/go12symtab for header: 0xfffffffb,
 	// two zero bytes, a byte giving the PC quantum,
 	// and a byte giving the pointer width in bytes.
-	pcln := (*[8]byte)(unsafe.Pointer(themoduledata.pclntab))
-	pcln32 := (*[2]uint32)(unsafe.Pointer(themoduledata.pclntab))
+	pcln := *(**[8]byte)(unsafe.Pointer(&datap.pclntable))
+	pcln32 := *(**[2]uint32)(unsafe.Pointer(&datap.pclntable))
 	if pcln32[0] != 0xfffffffb || pcln[4] != 0 || pcln[5] != 0 || pcln[6] != _PCQuantum || pcln[7] != ptrSize {
 		println("runtime: function symbol table header:", hex(pcln32[0]), hex(pcln[4]), hex(pcln[5]), hex(pcln[6]), hex(pcln[7]))
 		throw("invalid function symbol table\n")
 	}
 
-	// pclntable is all bytes of pclntab symbol.
-	sp := (*sliceStruct)(unsafe.Pointer(&themoduledata.pclntable))
-	sp.array = unsafe.Pointer(themoduledata.pclntab)
-	sp.len = int(uintptr(unsafe.Pointer(themoduledata.epclntab)) - uintptr(unsafe.Pointer(themoduledata.pclntab)))
-	sp.cap = sp.len
-
 	// ftab is lookup table for function by program counter.
-	nftab := int(*(*uintptr)(add(unsafe.Pointer(pcln), 8)))
-	p := add(unsafe.Pointer(pcln), 8+ptrSize)
-	sp = (*sliceStruct)(unsafe.Pointer(&themoduledata.ftab))
-	sp.array = p
-	sp.len = nftab + 1
-	sp.cap = sp.len
+	nftab := len(datap.ftab) - 1
 	for i := 0; i < nftab; i++ {
 		// NOTE: ftab[nftab].entry is legal; it is the address beyond the final function.
-		if themoduledata.ftab[i].entry > themoduledata.ftab[i+1].entry {
-			f1 := (*_func)(unsafe.Pointer(&themoduledata.pclntable[themoduledata.ftab[i].funcoff]))
-			f2 := (*_func)(unsafe.Pointer(&themoduledata.pclntable[themoduledata.ftab[i+1].funcoff]))
+		if datap.ftab[i].entry > datap.ftab[i+1].entry {
+			f1 := (*_func)(unsafe.Pointer(&datap.pclntable[datap.ftab[i].funcoff]))
+			f2 := (*_func)(unsafe.Pointer(&datap.pclntable[datap.ftab[i+1].funcoff]))
 			f2name := "end"
 			if i+1 < nftab {
 				f2name = funcname(f2)
 			}
-			println("function symbol table not sorted by program counter:", hex(themoduledata.ftab[i].entry), funcname(f1), ">", hex(themoduledata.ftab[i+1].entry), f2name)
+			println("function symbol table not sorted by program counter:", hex(datap.ftab[i].entry), funcname(f1), ">", hex(datap.ftab[i+1].entry), f2name)
 			for j := 0; j <= i; j++ {
-				print("\t", hex(themoduledata.ftab[j].entry), " ", funcname((*_func)(unsafe.Pointer(&themoduledata.pclntable[themoduledata.ftab[j].funcoff]))), "\n")
+				print("\t", hex(datap.ftab[j].entry), " ", funcname((*_func)(unsafe.Pointer(&datap.pclntable[datap.ftab[j].funcoff]))), "\n")
 			}
 			throw("invalid runtime symbol table")
 		}
+
+		if debugPcln || nftab-i < 5 {
+			// Check a PC near but not at the very end.
+			// The very end might be just padding that is not covered by the tables.
+			// No architecture rounds function entries to more than 16 bytes,
+			// but if one came along we'd need to subtract more here.
+			end := datap.ftab[i+1].entry - 16
+			if end < datap.ftab[i].entry {
+				end = datap.ftab[i].entry
+			}
+			f := (*_func)(unsafe.Pointer(&datap.pclntable[datap.ftab[i].funcoff]))
+			pcvalue(f, f.pcfile, end, true)
+			pcvalue(f, f.pcln, end, true)
+			pcvalue(f, f.pcsp, end, true)
+		}
 	}
 
-	// The ftab ends with a half functab consisting only of
-	// 'entry', followed by a uint32 giving the pcln-relative
-	// offset of the file table.
-	sp = (*sliceStruct)(unsafe.Pointer(&themoduledata.filetab))
-	end := unsafe.Pointer(&themoduledata.ftab[nftab].funcoff) // just beyond ftab
-	fileoffset := *(*uint32)(end)
-	sp.array = unsafe.Pointer(&themoduledata.pclntable[fileoffset])
-	// length is in first element of array.
-	// set len to 1 so we can get first element.
-	sp.len = 1
-	sp.cap = 1
-	sp.len = int(themoduledata.filetab[0])
-	sp.cap = sp.len
+	if datap.minpc != datap.ftab[0].entry ||
+		datap.maxpc != datap.ftab[nftab].entry {
+		throw("minpc or maxpc invalid")
+	}
 
-	themoduledata.minpc = themoduledata.ftab[0].entry
-	themoduledata.maxpc = themoduledata.ftab[nftab].entry
+	for _, modulehash := range datap.modulehashes {
+		if modulehash.linktimehash != *modulehash.runtimehash {
+			println("abi mismatch detected between", datap.modulename, "and", modulehash.modulename)
+			throw("abi mismatch")
+		}
+	}
 }
 
 // FuncForPC returns a *Func describing the function that contains the
@@ -158,34 +185,45 @@ func (f *Func) FileLine(pc uintptr) (file string, line int) {
 	return file, int(line32)
 }
 
+func findmoduledatap(pc uintptr) *moduledata {
+	for datap := &firstmoduledata; datap != nil; datap = datap.next {
+		if datap.minpc <= pc && pc <= datap.maxpc {
+			return datap
+		}
+	}
+	return nil
+}
+
 func findfunc(pc uintptr) *_func {
-	if pc < themoduledata.minpc || pc >= themoduledata.maxpc {
+	datap := findmoduledatap(pc)
+	if datap == nil {
 		return nil
 	}
 	const nsub = uintptr(len(findfuncbucket{}.subbuckets))
 
-	x := pc - themoduledata.minpc
+	x := pc - datap.minpc
 	b := x / pcbucketsize
 	i := x % pcbucketsize / (pcbucketsize / nsub)
 
-	ffb := (*findfuncbucket)(add(unsafe.Pointer(themoduledata.findfunctab), b*unsafe.Sizeof(findfuncbucket{})))
+	ffb := (*findfuncbucket)(add(unsafe.Pointer(datap.findfunctab), b*unsafe.Sizeof(findfuncbucket{})))
 	idx := ffb.idx + uint32(ffb.subbuckets[i])
-	if pc < themoduledata.ftab[idx].entry {
+	if pc < datap.ftab[idx].entry {
 		throw("findfunc: bad findfunctab entry")
 	}
 
 	// linear search to find func with pc >= entry.
-	for themoduledata.ftab[idx+1].entry <= pc {
+	for datap.ftab[idx+1].entry <= pc {
 		idx++
 	}
-	return (*_func)(unsafe.Pointer(&themoduledata.pclntable[themoduledata.ftab[idx].funcoff]))
+	return (*_func)(unsafe.Pointer(&datap.pclntable[datap.ftab[idx].funcoff]))
 }
 
 func pcvalue(f *_func, off int32, targetpc uintptr, strict bool) int32 {
 	if off == 0 {
 		return -1
 	}
-	p := themoduledata.pclntable[off:]
+	datap := findmoduledatap(f.entry) // inefficient
+	p := datap.pclntable[off:]
 	pc := f.entry
 	val := int32(-1)
 	for {
@@ -207,7 +245,7 @@ func pcvalue(f *_func, off int32, targetpc uintptr, strict bool) int32 {
 
 	print("runtime: invalid pc-encoded table f=", funcname(f), " pc=", hex(pc), " targetpc=", hex(targetpc), " tab=", p, "\n")
 
-	p = themoduledata.pclntable[off:]
+	p = datap.pclntable[off:]
 	pc = f.entry
 	val = -1
 	for {
@@ -227,7 +265,8 @@ func cfuncname(f *_func) *byte {
 	if f == nil || f.nameoff == 0 {
 		return nil
 	}
-	return (*byte)(unsafe.Pointer(&themoduledata.pclntable[f.nameoff]))
+	datap := findmoduledatap(f.entry) // inefficient
+	return (*byte)(unsafe.Pointer(&datap.pclntable[f.nameoff]))
 }
 
 func funcname(f *_func) string {
@@ -235,13 +274,14 @@ func funcname(f *_func) string {
 }
 
 func funcline1(f *_func, targetpc uintptr, strict bool) (file string, line int32) {
+	datap := findmoduledatap(f.entry) // inefficient
 	fileno := int(pcvalue(f, f.pcfile, targetpc, strict))
 	line = pcvalue(f, f.pcln, targetpc, strict)
-	if fileno == -1 || line == -1 || fileno >= len(themoduledata.filetab) {
+	if fileno == -1 || line == -1 || fileno >= len(datap.filetab) {
 		// print("looking for ", hex(targetpc), " in ", funcname(f), " got file=", fileno, " line=", lineno, "\n")
 		return "?", 0
 	}
-	file = gostringnocopy(&themoduledata.pclntable[themoduledata.filetab[fileno]])
+	file = gostringnocopy(&datap.pclntable[datap.filetab[fileno]])
 	return
 }
 
@@ -252,7 +292,7 @@ func funcline(f *_func, targetpc uintptr) (file string, line int32) {
 func funcspdelta(f *_func, targetpc uintptr) int32 {
 	x := pcvalue(f, f.pcsp, targetpc, true)
 	if x&(ptrSize-1) != 0 {
-		print("invalid spdelta ", hex(f.entry), " ", hex(targetpc), " ", hex(f.pcsp), " ", x, "\n")
+		print("invalid spdelta ", funcname(f), " ", hex(f.entry), " ", hex(targetpc), " ", hex(f.pcsp), " ", x, "\n")
 	}
 	return x
 }

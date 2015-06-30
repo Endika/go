@@ -340,6 +340,16 @@ type OuterOuterStruct struct {
 	OuterStruct
 }
 
+type NestedAndChardata struct {
+	AB       []string `xml:"A>B"`
+	Chardata string   `xml:",chardata"`
+}
+
+type NestedAndComment struct {
+	AB      []string `xml:"A>B"`
+	Comment string   `xml:",comment"`
+}
+
 func ifaceptr(x interface{}) interface{} {
 	return &x
 }
@@ -995,6 +1005,14 @@ var marshalTests = []struct {
 		ExpectXML: `<outer xmlns="testns" int="10"></outer>`,
 		Value:     &OuterOuterStruct{OuterStruct{IntAttr: 10}},
 	},
+	{
+		ExpectXML: `<NestedAndChardata><A><B></B><B></B></A>test</NestedAndChardata>`,
+		Value:     &NestedAndChardata{AB: make([]string, 2), Chardata: "test"},
+	},
+	{
+		ExpectXML: `<NestedAndComment><A><B></B><B></B></A><!--test--></NestedAndComment>`,
+		Value:     &NestedAndComment{AB: make([]string, 2), Comment: "test"},
+	},
 }
 
 func TestMarshal(t *testing.T) {
@@ -1297,7 +1315,7 @@ var encodeTokenTests = []struct {
 	toks: []Token{
 		CharData(" \t\n"),
 	},
-	want: ` &#x9;&#xA;`,
+	want: " &#x9;\n",
 }, {
 	desc: "comment",
 	toks: []Token{

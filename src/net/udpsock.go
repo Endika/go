@@ -32,7 +32,7 @@ func (a *UDPAddr) isWildcard() bool {
 	return a.IP.IsUnspecified()
 }
 
-func (a *UDPAddr) toAddr() Addr {
+func (a *UDPAddr) opAddr() Addr {
 	if a == nil {
 		return nil
 	}
@@ -53,9 +53,9 @@ func ResolveUDPAddr(net, addr string) (*UDPAddr, error) {
 	default:
 		return nil, UnknownNetworkError(net)
 	}
-	a, err := resolveInternetAddr(net, addr, noDeadline)
+	addrs, err := internetAddrList(net, addr, noDeadline)
 	if err != nil {
 		return nil, err
 	}
-	return a.toAddr().(*UDPAddr), nil
+	return addrs.first(isIPv4).(*UDPAddr), nil
 }

@@ -49,7 +49,7 @@ var complements = []int16{
 	ACMNW: ACMPW,
 }
 
-func stacksplit(ctxt *obj.Link, p *obj.Prog, framesize int32, noctxt int) *obj.Prog {
+func stacksplit(ctxt *obj.Link, p *obj.Prog, framesize int32) *obj.Prog {
 	// MOV	g_stackguard(g), R1
 	p = obj.Appendp(ctxt, p)
 
@@ -152,58 +152,61 @@ func stacksplit(ctxt *obj.Link, p *obj.Prog, framesize int32, noctxt int) *obj.P
 		p.Reg = REG_R2
 	}
 
-	// BHI	done
-	p = obj.Appendp(ctxt, p)
-	q1 := p
+	// BLS	do-morestack
+	bls := obj.Appendp(ctxt, p)
+	bls.As = ABLS
+	bls.To.Type = obj.TYPE_BRANCH
 
-	p.As = ABHI
-	p.To.Type = obj.TYPE_BRANCH
+	var last *obj.Prog
+	for last = ctxt.Cursym.Text; last.Link != nil; last = last.Link {
+	}
 
 	// MOV	LR, R3
-	p = obj.Appendp(ctxt, p)
-
-	p.As = AMOVD
-	p.From.Type = obj.TYPE_REG
-	p.From.Reg = REGLINK
-	p.To.Type = obj.TYPE_REG
-	p.To.Reg = REG_R3
+	movlr := obj.Appendp(ctxt, last)
+	movlr.As = AMOVD
+	movlr.From.Type = obj.TYPE_REG
+	movlr.From.Reg = REGLINK
+	movlr.To.Type = obj.TYPE_REG
+	movlr.To.Reg = REG_R3
 	if q != nil {
-		q.Pcond = p
+		q.Pcond = movlr
 	}
+	bls.Pcond = movlr
 
-	// TODO(minux): only for debug
-	p = obj.Appendp(ctxt, p)
-	p.As = AMOVD
-	p.From.Type = obj.TYPE_CONST
-	p.From.Offset = int64(framesize)
-	p.To.Type = obj.TYPE_REG
-	p.To.Reg = REGTMP
+	debug := movlr
+	if false {
+		debug = obj.Appendp(ctxt, debug)
+		debug.As = AMOVD
+		debug.From.Type = obj.TYPE_CONST
+		debug.From.Offset = int64(framesize)
+		debug.To.Type = obj.TYPE_REG
+		debug.To.Reg = REGTMP
+	}
 
 	// BL	runtime.morestack(SB)
-	p = obj.Appendp(ctxt, p)
-
-	p.As = ABL
-	p.To.Type = obj.TYPE_BRANCH
-	if ctxt.Cursym.Cfunc != 0 {
-		p.To.Sym = obj.Linklookup(ctxt, "runtime.morestackc", 0)
-	} else {
-		p.To.Sym = ctxt.Symmorestack[noctxt]
+	call := obj.Appendp(ctxt, debug)
+	call.As = ABL
+	call.To.Type = obj.TYPE_BRANCH
+	morestack := "runtime.morestack"
+	switch {
+	case ctxt.Cursym.Cfunc != 0:
+		morestack = "runtime.morestackc"
+	case ctxt.Cursym.Text.From3.Offset&obj.NEEDCTXT == 0:
+		morestack = "runtime.morestack_noctxt"
 	}
+	call.To.Sym = obj.Linklookup(ctxt, morestack, 0)
 
 	// B	start
-	p = obj.Appendp(ctxt, p)
+	jmp := obj.Appendp(ctxt, call)
+	jmp.As = AB
+	jmp.To.Type = obj.TYPE_BRANCH
+	jmp.Pcond = ctxt.Cursym.Text.Link
 
-	p.As = AB
-	p.To.Type = obj.TYPE_BRANCH
-	p.Pcond = ctxt.Cursym.Text.Link
+	// placeholder for bls's jump target
+	// p = obj.Appendp(ctxt, p)
+	// p.As = obj.ANOP
 
-	// placeholder for q1's jump target
-	p = obj.Appendp(ctxt, p)
-
-	p.As = obj.ANOP
-	q1.Pcond = p
-
-	return p
+	return bls
 }
 
 func progedit(ctxt *obj.Link, p *obj.Prog) {
@@ -465,11 +468,6 @@ loop:
 }
 
 func preprocess(ctxt *obj.Link, cursym *obj.LSym) {
-	if ctxt.Symmorestack[0] == nil {
-		ctxt.Symmorestack[0] = obj.Linklookup(ctxt, "runtime.morestack", 0)
-		ctxt.Symmorestack[1] = obj.Linklookup(ctxt, "runtime.morestack_noctxt", 0)
-	}
-
 	ctxt.Cursym = cursym
 
 	if cursym.Text == nil || cursym.Text.Link == nil {
@@ -488,7 +486,7 @@ func preprocess(ctxt *obj.Link, cursym *obj.LSym) {
 	 * strip NOPs
 	 * expand RET
 	 */
-	obj.Bflush(ctxt.Bso)
+	ctxt.Bso.Flush()
 	q := (*obj.Prog)(nil)
 	var q1 *obj.Prog
 	for p := cursym.Text; p != nil; p = p.Link {
@@ -578,12 +576,12 @@ func preprocess(ctxt *obj.Link, cursym *obj.LSym) {
 				if ctxt.Debugvlog != 0 {
 					fmt.Fprintf(ctxt.Bso, "save suppressed in: %s\n", cursym.Text.From.Sym.Name)
 				}
-				obj.Bflush(ctxt.Bso)
+				ctxt.Bso.Flush()
 				cursym.Text.Mark |= LEAF
 			}
 
 			if !(p.From3.Offset&obj.NOSPLIT != 0) {
-				p = stacksplit(ctxt, p, ctxt.Autosize, bool2int(cursym.Text.From3.Offset&obj.NEEDCTXT == 0)) // emit split check
+				p = stacksplit(ctxt, p, ctxt.Autosize) // emit split check
 			}
 
 			aoffset = ctxt.Autosize
@@ -781,14 +779,12 @@ func preprocess(ctxt *obj.Link, cursym *obj.LSym) {
 			}
 
 			p.As = obj.ARET
-			p.Lineno = p.Lineno
 			p.To.Type = obj.TYPE_MEM
 			p.To.Offset = 0
 			p.To.Reg = REGLINK
 			p.Spadj = +ctxt.Autosize
 
-		case AADD,
-			ASUB:
+		case AADD, ASUB:
 			if p.To.Type == obj.TYPE_REG && p.To.Reg == REGSP && p.From.Type == obj.TYPE_CONST {
 				if p.As == AADD {
 					p.Spadj = int32(-p.From.Offset)
@@ -812,6 +808,7 @@ var unaryDst = map[int]bool{
 	ADWORD: true,
 	ABL:    true,
 	AB:     true,
+	ASVC:   true,
 }
 
 var Linkarm64 = obj.LinkArch{

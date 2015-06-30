@@ -46,7 +46,7 @@ type pollDesc struct {
 	// in a lock-free way by all operations.
 	// NOTE(dvyukov): the following code uses uintptr to store *g (rg/wg),
 	// that will blow up when GC starts moving objects.
-	lock    mutex // protectes the following fields
+	lock    mutex // protects the following fields
 	fd      uintptr
 	closing bool
 	seq     uintptr // protects from stale timers and ready notifications
@@ -275,24 +275,22 @@ func net_runtime_pollUnblock(pd *pollDesc) {
 
 // make pd ready, newly runnable goroutines (if any) are returned in rg/wg
 // May run during STW, so write barriers are not allowed.
-// Eliminating WB calls using setGNoWriteBarrier are safe since the gs are
-// reachable through allg.
 //go:nowritebarrier
-func netpollready(gpp **g, pd *pollDesc, mode int32) {
-	var rg, wg *g
+func netpollready(gpp *guintptr, pd *pollDesc, mode int32) {
+	var rg, wg guintptr
 	if mode == 'r' || mode == 'r'+'w' {
-		setGNoWriteBarrier(&rg, netpollunblock(pd, 'r', true))
+		rg.set(netpollunblock(pd, 'r', true))
 	}
 	if mode == 'w' || mode == 'r'+'w' {
-		setGNoWriteBarrier(&wg, netpollunblock(pd, 'w', true))
+		wg.set(netpollunblock(pd, 'w', true))
 	}
-	if rg != nil {
-		setGNoWriteBarrier(&rg.schedlink, *gpp)
-		setGNoWriteBarrier(gpp, rg)
+	if rg != 0 {
+		rg.ptr().schedlink = *gpp
+		*gpp = rg
 	}
-	if wg != nil {
-		setGNoWriteBarrier(&wg.schedlink, *gpp)
-		setGNoWriteBarrier(gpp, wg)
+	if wg != 0 {
+		wg.ptr().schedlink = *gpp
+		*gpp = wg
 	}
 }
 

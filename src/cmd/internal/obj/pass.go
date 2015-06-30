@@ -95,8 +95,7 @@ func checkaddr(ctxt *Link, p *Prog, a *Addr) {
 		}
 		return
 
-	case TYPE_FCONST,
-		TYPE_SCONST:
+	case TYPE_FCONST, TYPE_SCONST:
 		if a.Reg != 0 || a.Index != 0 || a.Scale != 0 || a.Name != 0 || a.Offset != 0 || a.Sym != nil {
 			break
 		}
@@ -158,7 +157,9 @@ func linkpatch(ctxt *Link, sym *LSym) {
 
 	for p := sym.Text; p != nil; p = p.Link {
 		checkaddr(ctxt, p, &p.From)
-		checkaddr(ctxt, p, &p.From3)
+		if p.From3 != nil {
+			checkaddr(ctxt, p, p.From3)
+		}
 		checkaddr(ctxt, p, &p.To)
 
 		if ctxt.Arch.Progedit != nil {

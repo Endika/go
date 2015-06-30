@@ -9,6 +9,7 @@ package pprof_test
 import (
 	"bytes"
 	"fmt"
+	"internal/testenv"
 	"math/big"
 	"os"
 	"os/exec"
@@ -122,7 +123,10 @@ func parseProfile(t *testing.T, bytes []byte, f func(uintptr, []uintptr)) {
 func testCPUProfile(t *testing.T, need []string, f func()) {
 	switch runtime.GOOS {
 	case "darwin":
-		if runtime.GOARCH != "arm" {
+		switch runtime.GOARCH {
+		case "arm", "arm64":
+			// nothing
+		default:
 			out, err := exec.Command("uname", "-a").CombinedOutput()
 			if err != nil {
 				t.Fatal(err)
@@ -206,11 +210,7 @@ func testCPUProfile(t *testing.T, need []string, f func()) {
 // Fork can hang if preempted with signals frequently enough (see issue 5517).
 // Ensure that we do not do this.
 func TestCPUProfileWithFork(t *testing.T) {
-	if runtime.GOOS == "darwin" {
-		if runtime.GOARCH == "arm" {
-			t.Skipf("skipping on darwin/arm")
-		}
-	}
+	testenv.MustHaveExec(t)
 
 	heap := 1 << 30
 	if runtime.GOOS == "android" {

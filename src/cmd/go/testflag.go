@@ -48,12 +48,14 @@ var testFlagDefn = []*testFlagSpec{
 	{name: "tags"},
 	{name: "compiler"},
 	{name: "race", boolVar: &buildRace},
+	{name: "linkshared", boolVar: &buildLinkshared},
 	{name: "installsuffix"},
 
 	// passed to 6.out, adding a "test." prefix to the name if necessary: -v becomes -test.v.
 	{name: "bench", passToTest: true},
 	{name: "benchmem", boolVar: new(bool), passToTest: true},
 	{name: "benchtime", passToTest: true},
+	{name: "count", passToTest: true},
 	{name: "coverprofile", passToTest: true},
 	{name: "cpu", passToTest: true},
 	{name: "cpuprofile", passToTest: true},
@@ -115,7 +117,7 @@ func testFlags(args []string) (packageNames, passToTest []string) {
 		var err error
 		switch f.name {
 		// bool flags.
-		case "a", "c", "i", "n", "x", "v", "race", "cover", "work":
+		case "a", "c", "i", "n", "x", "v", "race", "cover", "work", "linkshared":
 			setBoolFlag(f.boolVar, value)
 		case "o":
 			testO = value
@@ -169,7 +171,7 @@ func testFlags(args []string) (packageNames, passToTest []string) {
 			case "set", "count", "atomic":
 				testCoverMode = value
 			default:
-				fatalf("invalid flag argument for -cover: %q", value)
+				fatalf("invalid flag argument for -covermode: %q", value)
 			}
 			testCover = true
 		case "outputdir":
