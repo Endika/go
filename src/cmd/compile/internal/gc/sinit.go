@@ -19,7 +19,7 @@ const (
 )
 
 var (
-	initlist  *NodeList
+	initlist  []*Node
 	initplans map[*Node]*InitPlan
 	inittemps = make(map[*Node]*Node)
 )
@@ -47,15 +47,12 @@ func init1(n *Node, out **NodeList) {
 	}
 	switch n.Class {
 	case PEXTERN, PFUNC:
-		break
-
 	default:
 		if isblank(n) && n.Name.Curfn == nil && n.Name.Defn != nil && n.Name.Defn.Initorder == InitNotStarted {
 			// blank names initialization is part of init() but not
 			// when they are inside a function.
 			break
 		}
-
 		return
 	}
 
@@ -72,90 +69,43 @@ func init1(n *Node, out **NodeList) {
 		// Conversely, if there exists an initialization cycle involving
 		// a variable in the program, the tree walk will reach a cycle
 		// involving that variable.
-		var nv *Node
 		if n.Class != PFUNC {
-			nv = n
-			goto foundinitloop
+			foundinitloop(n, n)
 		}
 
-		for l := initlist; l.N != n; l = l.Next {
-			if l.N.Class != PFUNC {
-				nv = l.N
-				goto foundinitloop
+		for i := len(initlist) - 1; i >= 0; i-- {
+			x := initlist[i]
+			if x == n {
+				break
+			}
+			if x.Class != PFUNC {
+				foundinitloop(n, x)
 			}
 		}
 
 		// The loop involves only functions, ok.
 		return
-
-		// if there have already been errors printed,
-		// those errors probably confused us and
-		// there might not be a loop.  let the user
-		// fix those first.
-	foundinitloop:
-		Flusherrors()
-
-		if nerrors > 0 {
-			errorexit()
-		}
-
-		// There is a loop involving nv. We know about
-		// n and initlist = n1 <- ... <- nv <- ... <- n <- ...
-		fmt.Printf("%v: initialization loop:\n", nv.Line())
-
-		// Build back pointers in initlist.
-		for l := initlist; l != nil; l = l.Next {
-			if l.Next != nil {
-				l.Next.End = l
-			}
-		}
-
-		// Print nv -> ... -> n1 -> n.
-		var l *NodeList
-		for l = initlist; l.N != nv; l = l.Next {
-		}
-		for ; l != nil; l = l.End {
-			fmt.Printf("\t%v %v refers to\n", l.N.Line(), l.N.Sym)
-		}
-
-		// Print n -> ... -> nv.
-		for l = initlist; l.N != n; l = l.Next {
-		}
-		for ; l.N != nv; l = l.End {
-			fmt.Printf("\t%v %v refers to\n", l.N.Line(), l.N.Sym)
-		}
-		fmt.Printf("\t%v %v\n", nv.Line(), nv.Sym)
-		errorexit()
 	}
 
 	// reached a new unvisited node.
 	n.Initorder = InitPending
-
-	l := new(NodeList)
-	if l == nil {
-		Flusherrors()
-		Yyerror("out of memory")
-		errorexit()
-	}
-
-	l.Next = initlist
-	l.N = n
-	l.End = nil
-	initlist = l
+	initlist = append(initlist, n)
 
 	// make sure that everything n depends on is initialized.
 	// n->defn is an assignment to n
 	if defn := n.Name.Defn; defn != nil {
 		switch defn.Op {
 		default:
-			goto bad
+			Dump("defn", defn)
+			Fatalf("init1: bad defn")
 
 		case ODCLFUNC:
 			init2list(defn.Nbody, out)
 
 		case OAS:
 			if defn.Left != n {
-				goto bad
+				Dump("defn", defn)
+				Fatalf("init1: bad defn")
 			}
 			if isblank(defn.Left) && candiscard(defn.Right) {
 				defn.Op = OEMPTY
@@ -190,18 +140,51 @@ func init1(n *Node, out **NodeList) {
 		}
 	}
 
-	l = initlist
-	initlist = l.Next
-	if l.N != n {
-		Fatal("bad initlist")
+	last := len(initlist) - 1
+	if initlist[last] != n {
+		Fatalf("bad initlist %v", initlist)
 	}
+	initlist[last] = nil // allow GC
+	initlist = initlist[:last]
 
 	n.Initorder = InitDone
 	return
+}
 
-bad:
-	Dump("defn", n.Name.Defn)
-	Fatal("init1: bad defn")
+// foundinitloop prints an init loop error and exits.
+func foundinitloop(node, visited *Node) {
+	// If there have already been errors printed,
+	// those errors probably confused us and
+	// there might not be a loop. Let the user
+	// fix those first.
+	Flusherrors()
+	if nerrors > 0 {
+		errorexit()
+	}
+
+	// Find the index of node and visited in the initlist.
+	var nodeindex, visitedindex int
+	for ; initlist[nodeindex] != node; nodeindex++ {
+	}
+	for ; initlist[visitedindex] != visited; visitedindex++ {
+	}
+
+	// There is a loop involving visited. We know about node and
+	// initlist = n1 <- ... <- visited <- ... <- node <- ...
+	fmt.Printf("%v: initialization loop:\n", visited.Line())
+
+	// Print visited -> ... -> n1 -> node.
+	for _, n := range initlist[visitedindex:] {
+		fmt.Printf("\t%v %v refers to\n", n.Line(), n.Sym)
+	}
+
+	// Print node -> ... -> visited.
+	for _, n := range initlist[nodeindex:visitedindex] {
+		fmt.Printf("\t%v %v refers to\n", n.Line(), n.Sym)
+	}
+
+	fmt.Printf("\t%v %v\n", visited.Line(), visited.Sym)
+	errorexit()
 }
 
 // recurse over n, doing init1 everywhere.
@@ -211,7 +194,7 @@ func init2(n *Node, out **NodeList) {
 	}
 
 	if n.Op == ONAME && n.Ninit != nil {
-		Fatal("name %v with ninit: %v\n", n.Sym, Nconv(n, obj.FmtSign))
+		Fatalf("name %v with ninit: %v\n", n.Sym, Nconv(n, obj.FmtSign))
 	}
 
 	init1(n, out)
@@ -271,7 +254,7 @@ func initfix(l *NodeList) *NodeList {
  */
 func staticinit(n *Node, out **NodeList) bool {
 	if n.Op != ONAME || n.Class != PEXTERN || n.Name.Defn == nil || n.Name.Defn.Op != OAS {
-		Fatal("staticinit")
+		Fatalf("staticinit")
 	}
 
 	lineno = n.Lineno
@@ -301,6 +284,10 @@ func staticcopy(l *Node, r *Node, out **NodeList) bool {
 	}
 	orig := r
 	r = r.Name.Defn.Right
+
+	for r.Op == OCONVNOP {
+		r = r.Left
+	}
 
 	switch r.Op {
 	case ONAME:
@@ -380,6 +367,7 @@ func staticcopy(l *Node, r *Node, out **NodeList) bool {
 					rr.Orig = rr // completely separate copy
 					rr.Type = ll.Type
 					rr.Xoffset += e.Xoffset
+					setlineno(rr)
 					*out = list(*out, Nod(OAS, ll, rr))
 				}
 			}
@@ -393,6 +381,10 @@ func staticcopy(l *Node, r *Node, out **NodeList) bool {
 
 func staticassign(l *Node, r *Node, out **NodeList) bool {
 	var n1 Node
+
+	for r.Op == OCONVNOP {
+		r = r.Left
+	}
 
 	switch r.Op {
 	//dump("not static", r);
@@ -484,6 +476,7 @@ func staticassign(l *Node, r *Node, out **NodeList) bool {
 			if e.Expr.Op == OLITERAL {
 				gdata(&n1, e.Expr, int(n1.Type.Width))
 			} else {
+				setlineno(e.Expr)
 				a = Nod(OXXX, nil, nil)
 				*a = n1
 				a.Orig = a // completely separate copy
@@ -597,7 +590,7 @@ func structlit(ctxt int, pass int, n *Node, var_ *Node, init **NodeList) {
 	for nl := n.List; nl != nil; nl = nl.Next {
 		r = nl.N
 		if r.Op != OKEY {
-			Fatal("structlit: rhs not OKEY: %v", r)
+			Fatalf("structlit: rhs not OKEY: %v", r)
 		}
 		index = r.Left
 		value = r.Right
@@ -636,6 +629,7 @@ func structlit(ctxt int, pass int, n *Node, var_ *Node, init **NodeList) {
 		}
 
 		// build list of var.field = expr
+		setlineno(value)
 		a = Nod(ODOT, var_, newname(index.Sym))
 
 		a = Nod(OAS, a, value)
@@ -643,7 +637,7 @@ func structlit(ctxt int, pass int, n *Node, var_ *Node, init **NodeList) {
 		if pass == 1 {
 			walkexpr(&a, init) // add any assignments in r to top
 			if a.Op != OAS {
-				Fatal("structlit: not as")
+				Fatalf("structlit: not as")
 			}
 			a.Dodata = 2
 		} else {
@@ -664,7 +658,7 @@ func arraylit(ctxt int, pass int, n *Node, var_ *Node, init **NodeList) {
 	for l := n.List; l != nil; l = l.Next {
 		r = l.N
 		if r.Op != OKEY {
-			Fatal("arraylit: rhs not OKEY: %v", r)
+			Fatalf("arraylit: rhs not OKEY: %v", r)
 		}
 		index = r.Left
 		value = r.Right
@@ -703,6 +697,7 @@ func arraylit(ctxt int, pass int, n *Node, var_ *Node, init **NodeList) {
 		}
 
 		// build list of var[index] = value
+		setlineno(value)
 		a = Nod(OINDEX, var_, index)
 
 		a = Nod(OAS, a, value)
@@ -710,7 +705,7 @@ func arraylit(ctxt int, pass int, n *Node, var_ *Node, init **NodeList) {
 		if pass == 1 {
 			walkexpr(&a, init)
 			if a.Op != OAS {
-				Fatal("arraylit: not as")
+				Fatalf("arraylit: not as")
 			}
 			a.Dodata = 2
 		} else {
@@ -839,7 +834,7 @@ func slicelit(ctxt int, n *Node, var_ *Node, init **NodeList) {
 	for l := n.List; l != nil; l = l.Next {
 		r = l.N
 		if r.Op != OKEY {
-			Fatal("slicelit: rhs not OKEY: %v", r)
+			Fatalf("slicelit: rhs not OKEY: %v", r)
 		}
 		index = r.Left
 		value = r.Right
@@ -866,6 +861,7 @@ func slicelit(ctxt int, n *Node, var_ *Node, init **NodeList) {
 		}
 
 		// build list of var[c] = expr
+		setlineno(value)
 		a = Nod(OAS, a, value)
 
 		typecheck(&a, Etop)
@@ -896,7 +892,7 @@ func maplit(ctxt int, n *Node, var_ *Node, init **NodeList) {
 		r = l.N
 
 		if r.Op != OKEY {
-			Fatal("maplit: rhs not OKEY: %v", r)
+			Fatalf("maplit: rhs not OKEY: %v", r)
 		}
 		index = r.Left
 		value = r.Right
@@ -947,13 +943,14 @@ func maplit(ctxt int, n *Node, var_ *Node, init **NodeList) {
 			r = l.N
 
 			if r.Op != OKEY {
-				Fatal("maplit: rhs not OKEY: %v", r)
+				Fatalf("maplit: rhs not OKEY: %v", r)
 			}
 			index = r.Left
 			value = r.Right
 
 			if isliteral(index) && isliteral(value) {
 				// build vstat[b].a = key;
+				setlineno(index)
 				a = Nodintconst(b)
 
 				a = Nod(OINDEX, vstat, a)
@@ -965,6 +962,7 @@ func maplit(ctxt int, n *Node, var_ *Node, init **NodeList) {
 				*init = list(*init, a)
 
 				// build vstat[b].b = value;
+				setlineno(value)
 				a = Nodintconst(b)
 
 				a = Nod(OINDEX, vstat, a)
@@ -1016,7 +1014,7 @@ func maplit(ctxt int, n *Node, var_ *Node, init **NodeList) {
 		r = l.N
 
 		if r.Op != OKEY {
-			Fatal("maplit: rhs not OKEY: %v", r)
+			Fatalf("maplit: rhs not OKEY: %v", r)
 		}
 		index = r.Left
 		value = r.Right
@@ -1032,15 +1030,18 @@ func maplit(ctxt int, n *Node, var_ *Node, init **NodeList) {
 			val = temp(var_.Type.Type)
 		}
 
+		setlineno(r.Left)
 		a = Nod(OAS, key, r.Left)
 		typecheck(&a, Etop)
 		walkstmt(&a)
 		*init = list(*init, a)
+		setlineno(r.Right)
 		a = Nod(OAS, val, r.Right)
 		typecheck(&a, Etop)
 		walkstmt(&a)
 		*init = list(*init, a)
 
+		setlineno(val)
 		a = Nod(OAS, Nod(OINDEX, var_, key), val)
 		typecheck(&a, Etop)
 		walkstmt(&a)
@@ -1065,11 +1066,11 @@ func anylit(ctxt int, n *Node, var_ *Node, init **NodeList) {
 	t := n.Type
 	switch n.Op {
 	default:
-		Fatal("anylit: not lit")
+		Fatalf("anylit: not lit")
 
 	case OPTRLIT:
 		if !Isptr[t.Etype] {
-			Fatal("anylit: not ptr")
+			Fatalf("anylit: not ptr")
 		}
 
 		var r *Node
@@ -1095,7 +1096,7 @@ func anylit(ctxt int, n *Node, var_ *Node, init **NodeList) {
 
 	case OSTRUCTLIT:
 		if t.Etype != TSTRUCT {
-			Fatal("anylit: not struct")
+			Fatalf("anylit: not struct")
 		}
 
 		if simplename(var_) && count(n.List) > 4 {
@@ -1135,7 +1136,7 @@ func anylit(ctxt int, n *Node, var_ *Node, init **NodeList) {
 
 	case OARRAYLIT:
 		if t.Etype != TARRAY {
-			Fatal("anylit: not array")
+			Fatalf("anylit: not array")
 		}
 		if t.Bound < 0 {
 			slicelit(ctxt, n, var_, init)
@@ -1179,7 +1180,7 @@ func anylit(ctxt int, n *Node, var_ *Node, init **NodeList) {
 
 	case OMAPLIT:
 		if t.Etype != TMAP {
-			Fatal("anylit: not map")
+			Fatalf("anylit: not map")
 		}
 		maplit(ctxt, n, var_, init)
 	}
@@ -1286,14 +1287,14 @@ func initplan(n *Node) {
 	initplans[n] = p
 	switch n.Op {
 	default:
-		Fatal("initplan")
+		Fatalf("initplan")
 
 	case OARRAYLIT:
 		var a *Node
 		for l := n.List; l != nil; l = l.Next {
 			a = l.N
 			if a.Op != OKEY || !Smallintconst(a.Left) {
-				Fatal("initplan arraylit")
+				Fatalf("initplan arraylit")
 			}
 			addvalue(p, n.Type.Type.Width*Mpgetfix(a.Left.Val().U.(*Mpint)), nil, a.Right)
 		}
@@ -1303,7 +1304,7 @@ func initplan(n *Node) {
 		for l := n.List; l != nil; l = l.Next {
 			a = l.N
 			if a.Op != OKEY || a.Left.Type == nil {
-				Fatal("initplan structlit")
+				Fatalf("initplan structlit")
 			}
 			addvalue(p, a.Left.Type.Width, nil, a.Right)
 		}
@@ -1313,7 +1314,7 @@ func initplan(n *Node) {
 		for l := n.List; l != nil; l = l.Next {
 			a = l.N
 			if a.Op != OKEY {
-				Fatal("initplan maplit")
+				Fatalf("initplan maplit")
 			}
 			addvalue(p, -1, a.Left, a.Right)
 		}
@@ -1359,7 +1360,7 @@ func iszero(n *Node) bool {
 		switch n.Val().Ctype() {
 		default:
 			Dump("unexpected literal", n)
-			Fatal("iszero")
+			Fatalf("iszero")
 
 		case CTNIL:
 			return true
@@ -1526,7 +1527,7 @@ func gen_as_init(n *Node) bool {
 no:
 	if n.Dodata == 2 {
 		Dump("\ngen_as_init", n)
-		Fatal("gen_as_init couldnt make data statement")
+		Fatalf("gen_as_init couldnt make data statement")
 	}
 
 	return false

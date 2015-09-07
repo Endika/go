@@ -369,7 +369,18 @@ func relocsym(s *LSym) {
 
 		switch r.Type {
 		default:
-			o = 0
+			switch siz {
+			default:
+				Diag("bad reloc size %#x for %s", uint32(siz), r.Sym.Name)
+			case 1:
+				o = int64(s.P[off])
+			case 2:
+				o = int64(Ctxt.Arch.ByteOrder.Uint16(s.P[off:]))
+			case 4:
+				o = int64(Ctxt.Arch.ByteOrder.Uint32(s.P[off:]))
+			case 8:
+				o = int64(Ctxt.Arch.ByteOrder.Uint64(s.P[off:]))
+			}
 			if Thearch.Archreloc(r, s, &o) < 0 {
 				Diag("unknown reloc %d", r.Type)
 			}
@@ -487,7 +498,7 @@ func relocsym(s *LSym) {
 
 			// On amd64, 4-byte offsets will be sign-extended, so it is impossible to
 			// access more than 2GB of static data; fail at link time is better than
-			// fail at runtime. See http://golang.org/issue/7980.
+			// fail at runtime. See https://golang.org/issue/7980.
 			// Instead of special casing only amd64, we treat this as an error on all
 			// 64-bit architectures so as to be future-proof.
 			if int32(o) < 0 && Thearch.Ptrsize > 4 && siz == 4 {
@@ -778,7 +789,6 @@ func Codeblk(addr int64, size int64) {
 	}
 
 	eaddr := addr + size
-	var n int64
 	var q []byte
 	for ; sym != nil; sym = sym.Next {
 		if !sym.Reachable {
@@ -797,20 +807,18 @@ func Codeblk(addr int64, size int64) {
 		}
 
 		fmt.Fprintf(&Bso, "%.6x\t%-20s\n", uint64(int64(addr)), sym.Name)
-		n = sym.Size
 		q = sym.P
 
-		for n >= 16 {
-			fmt.Fprintf(&Bso, "%.6x\t%-20.16I\n", uint64(addr), q)
+		for len(q) >= 16 {
+			fmt.Fprintf(&Bso, "%.6x\t% x\n", uint64(addr), q[:16])
 			addr += 16
 			q = q[16:]
-			n -= 16
 		}
 
-		if n > 0 {
-			fmt.Fprintf(&Bso, "%.6x\t%-20.*I\n", uint64(addr), int(n), q)
+		if len(q) > 0 {
+			fmt.Fprintf(&Bso, "%.6x\t% x\n", uint64(addr), q)
+			addr += int64(len(q))
 		}
-		addr += n
 	}
 
 	if addr < eaddr {
@@ -1393,26 +1401,25 @@ func dodata() {
 		Diag("data or bss segment too large")
 	}
 
-	if Iself && Linkmode == LinkExternal && s != nil && s.Type == obj.STLSBSS && HEADTYPE != obj.Hopenbsd {
-		sect := addsection(&Segdata, ".tbss", 06)
-		sect.Align = int32(Thearch.Ptrsize)
-		sect.Vaddr = 0
+	if s != nil && s.Type == obj.STLSBSS {
+		if Iself && (Linkmode == LinkExternal || Debug['d'] == 0) && HEADTYPE != obj.Hopenbsd {
+			sect = addsection(&Segdata, ".tbss", 06)
+			sect.Align = int32(Thearch.Ptrsize)
+			sect.Vaddr = 0
+		} else {
+			sect = nil
+		}
 		datsize = 0
+
 		for ; s != nil && s.Type == obj.STLSBSS; s = s.Next {
 			datsize = aligndatsize(datsize, s)
 			s.Sect = sect
-			s.Value = int64(uint64(datsize) - sect.Vaddr)
+			s.Value = datsize
 			growdatsize(&datsize, s)
 		}
 
-		sect.Length = uint64(datsize)
-	} else {
-		// Might be internal linking but still using cgo.
-		// In that case, the only possible STLSBSS symbol is runtime.tlsg.
-		// Give it offset 0, because it's the only thing here.
-		if s != nil && s.Type == obj.STLSBSS && s.Name == "runtime.tlsg" {
-			s.Value = 0
-			s = s.Next
+		if sect != nil {
+			sect.Length = uint64(datsize)
 		}
 	}
 
@@ -1682,8 +1689,11 @@ func address() {
 	var noptrbss *Section
 	var vlen int64
 	for s := Segdata.Sect; s != nil; s = s.Next {
+		if Iself && s.Name == ".tbss" {
+			continue
+		}
 		vlen = int64(s.Length)
-		if s.Next != nil {
+		if s.Next != nil && !(Iself && s.Next.Name == ".tbss") {
 			vlen = int64(s.Next.Vaddr - s.Vaddr)
 		}
 		s.Vaddr = va

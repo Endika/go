@@ -402,18 +402,18 @@ func mark(path string, info os.FileInfo, err error, errors *[]error, clear bool)
 func chtmpdir(t *testing.T) (restore func()) {
 	oldwd, err := os.Getwd()
 	if err != nil {
-		t.Fatal("chtmpdir: %v", err)
+		t.Fatalf("chtmpdir: %v", err)
 	}
 	d, err := ioutil.TempDir("", "test")
 	if err != nil {
-		t.Fatal("chtmpdir: %v", err)
+		t.Fatalf("chtmpdir: %v", err)
 	}
 	if err := os.Chdir(d); err != nil {
-		t.Fatal("chtmpdir: %v", err)
+		t.Fatalf("chtmpdir: %v", err)
 	}
 	return func() {
 		if err := os.Chdir(oldwd); err != nil {
-			t.Fatal("chtmpdir: %v", err)
+			t.Fatalf("chtmpdir: %v", err)
 		}
 		os.RemoveAll(d)
 	}
@@ -1064,7 +1064,7 @@ func TestDriveLetterInEvalSymlinks(t *testing.T) {
 	}
 }
 
-func TestBug3486(t *testing.T) { // http://golang.org/issue/3486
+func TestBug3486(t *testing.T) { // https://golang.org/issue/3486
 	if runtime.GOOS == "darwin" {
 		switch runtime.GOARCH {
 		case "arm", "arm64":

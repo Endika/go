@@ -73,7 +73,7 @@ func popdcl() {
 	}
 
 	if d == nil {
-		Fatal("popdcl: no mark")
+		Fatalf("popdcl: no mark")
 	}
 	dclstack = d.Link
 	block = d.Block
@@ -182,7 +182,7 @@ func declare(n *Node, ctxt uint8) {
 	s := n.Sym
 
 	// kludgy: typecheckok means we're past parsing.  Eg genwrapper may declare out of package names later.
-	if importpkg == nil && typecheckok == 0 && s.Pkg != localpkg {
+	if importpkg == nil && !typecheckok && s.Pkg != localpkg {
 		Yyerror("cannot declare name %v", s)
 	}
 
@@ -198,7 +198,7 @@ func declare(n *Node, ctxt uint8) {
 		}
 	} else {
 		if Curfn == nil && ctxt == PAUTO {
-			Fatal("automatic outside function")
+			Fatalf("automatic outside function")
 		}
 		if Curfn != nil {
 			Curfn.Func.Dcl = list(Curfn.Func.Dcl, n)
@@ -238,7 +238,7 @@ func declare(n *Node, ctxt uint8) {
 
 func addvar(n *Node, t *Type, ctxt uint8) {
 	if n == nil || n.Sym == nil || (n.Op != ONAME && n.Op != ONONAME) || t == nil {
-		Fatal("addvar: n=%v t=%v nil", n, t)
+		Fatalf("addvar: n=%v t=%v nil", n, t)
 	}
 
 	n.Op = ONAME
@@ -366,7 +366,7 @@ func constiter(vl *NodeList, t *Node, cl *NodeList) *NodeList {
  */
 func newname(s *Sym) *Node {
 	if s == nil {
-		Fatal("newname nil")
+		Fatalf("newname nil")
 	}
 
 	n := Nod(ONAME, nil, nil)
@@ -548,7 +548,7 @@ func colas(left *NodeList, right *NodeList, lno int32) *Node {
  */
 func ifacedcl(n *Node) {
 	if n.Op != ODCLFIELD || n.Right == nil {
-		Fatal("ifacedcl")
+		Fatalf("ifacedcl")
 	}
 
 	if isblank(n.Left) {
@@ -582,7 +582,11 @@ func ifacedcl(n *Node) {
 func funchdr(n *Node) {
 	// change the declaration context from extern to auto
 	if Funcdepth == 0 && dclcontext != PEXTERN {
-		Fatal("funchdr: dclcontext")
+		Fatalf("funchdr: dclcontext")
+	}
+
+	if importpkg == nil && n.Func.Nname != nil {
+		makefuncsym(n.Func.Nname.Sym)
 	}
 
 	dclcontext = PAUTO
@@ -603,7 +607,7 @@ func funchdr(n *Node) {
 
 func funcargs(nt *Node) {
 	if nt.Op != OTFUNC {
-		Fatal("funcargs %v", Oconv(int(nt.Op), 0))
+		Fatalf("funcargs %v", Oconv(int(nt.Op), 0))
 	}
 
 	// re-start the variable generation number
@@ -617,7 +621,7 @@ func funcargs(nt *Node) {
 	if nt.Left != nil {
 		n := nt.Left
 		if n.Op != ODCLFIELD {
-			Fatal("funcargs receiver %v", Oconv(int(n.Op), 0))
+			Fatalf("funcargs receiver %v", Oconv(int(n.Op), 0))
 		}
 		if n.Left != nil {
 			n.Left.Op = ONAME
@@ -634,7 +638,7 @@ func funcargs(nt *Node) {
 	for l := nt.List; l != nil; l = l.Next {
 		n = l.N
 		if n.Op != ODCLFIELD {
-			Fatal("funcargs in %v", Oconv(int(n.Op), 0))
+			Fatalf("funcargs in %v", Oconv(int(n.Op), 0))
 		}
 		if n.Left != nil {
 			n.Left.Op = ONAME
@@ -655,7 +659,7 @@ func funcargs(nt *Node) {
 		n = l.N
 
 		if n.Op != ODCLFIELD {
-			Fatal("funcargs out %v", Oconv(int(n.Op), 0))
+			Fatalf("funcargs out %v", Oconv(int(n.Op), 0))
 		}
 
 		if n.Left == nil {
@@ -701,7 +705,7 @@ func funcargs(nt *Node) {
  */
 func funcargs2(t *Type) {
 	if t.Etype != TFUNC {
-		Fatal("funcargs2 %v", t)
+		Fatalf("funcargs2 %v", t)
 	}
 
 	if t.Thistuple != 0 {
@@ -749,7 +753,7 @@ func funcargs2(t *Type) {
 func funcbody(n *Node) {
 	// change the declaration context from auto to extern
 	if dclcontext != PAUTO {
-		Fatal("funcbody: dclcontext")
+		Fatalf("funcbody: dclcontext")
 	}
 	popdcl()
 	Funcdepth--
@@ -809,7 +813,7 @@ func structfield(n *Node) *Type {
 	lineno = n.Lineno
 
 	if n.Op != ODCLFIELD {
-		Fatal("structfield: oops %v\n", n)
+		Fatalf("structfield: oops %v\n", n)
 	}
 
 	f := typ(TFIELD)
@@ -939,7 +943,7 @@ func interfacefield(n *Node) *Type {
 	lineno = n.Lineno
 
 	if n.Op != ODCLFIELD {
-		Fatal("interfacefield: oops %v\n", n)
+		Fatalf("interfacefield: oops %v\n", n)
 	}
 
 	if n.Val().Ctype() != CTxxx {
@@ -1352,7 +1356,7 @@ func methodname1(n *Node, t *Node) *Node {
 func addmethod(sf *Sym, t *Type, local bool, nointerface bool) {
 	// get field sym
 	if sf == nil {
-		Fatal("no method symbol")
+		Fatalf("no method symbol")
 	}
 
 	// get parent type sym
@@ -1429,7 +1433,7 @@ func addmethod(sf *Sym, t *Type, local bool, nointerface bool) {
 	for f := pa.Method; f != nil; f = f.Down {
 		d = f
 		if f.Etype != TFIELD {
-			Fatal("addmethod: not TFIELD: %v", Tconv(f, obj.FmtLong))
+			Fatalf("addmethod: not TFIELD: %v", Tconv(f, obj.FmtLong))
 		}
 		if sf.Name != f.Sym.Name {
 			continue
@@ -1445,7 +1449,7 @@ func addmethod(sf *Sym, t *Type, local bool, nointerface bool) {
 
 	// during import unexported method names should be in the type's package
 	if importpkg != nil && f.Sym != nil && !exportname(f.Sym.Name) && f.Sym.Pkg != structpkg {
-		Fatal("imported method name %v in wrong package %s\n", Sconv(f.Sym, obj.FmtSign), structpkg.Name)
+		Fatalf("imported method name %v in wrong package %s\n", Sconv(f.Sym, obj.FmtSign), structpkg.Name)
 	}
 
 	if d == nil {
@@ -1462,7 +1466,7 @@ func funccompile(n *Node) {
 
 	if n.Type == nil {
 		if nerrors == 0 {
-			Fatal("funccompile missing type")
+			Fatalf("funccompile missing type")
 		}
 		return
 	}
@@ -1471,7 +1475,7 @@ func funccompile(n *Node) {
 	checkwidth(n.Type)
 
 	if Curfn != nil {
-		Fatal("funccompile %v inside %v", n.Func.Nname.Sym, Curfn.Func.Nname.Sym)
+		Fatalf("funccompile %v inside %v", n.Func.Nname.Sym, Curfn.Func.Nname.Sym)
 	}
 
 	Stksize = 0
@@ -1489,12 +1493,21 @@ func funcsym(s *Sym) *Sym {
 	}
 
 	s1 := Pkglookup(s.Name+"·f", s.Pkg)
-	if s1.Def == nil {
-		s1.Def = newfuncname(s1)
-		s1.Def.Func.Shortname = newname(s)
-		funcsyms = list(funcsyms, s1.Def)
-	}
 	s.Fsym = s1
-
 	return s1
+}
+
+func makefuncsym(s *Sym) {
+	if isblanksym(s) {
+		return
+	}
+	if compiling_runtime != 0 && s.Name == "getg" {
+		// runtime.getg() is not a real function and so does
+		// not get a funcsym.
+		return
+	}
+	s1 := funcsym(s)
+	s1.Def = newfuncname(s1)
+	s1.Def.Func.Shortname = newname(s)
+	funcsyms = list(funcsyms, s1.Def)
 }

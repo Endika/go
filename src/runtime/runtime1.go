@@ -299,8 +299,6 @@ type dbgVar struct {
 	value *int32
 }
 
-// TODO(rsc): Make GC respect debug.invalidptr.
-
 // Holds variables parsed from GODEBUG env var,
 // except for "memprofilerate" since there is an
 // existing int var for that value, which may
@@ -312,6 +310,7 @@ var debug struct {
 	gcpacertrace      int32
 	gcshrinkstackoff  int32
 	gcstackbarrieroff int32
+	gcstackbarrierall int32
 	gcstoptheworld    int32
 	gctrace           int32
 	invalidptr        int32
@@ -329,6 +328,7 @@ var dbgvars = []dbgVar{
 	{"gcpacertrace", &debug.gcpacertrace},
 	{"gcshrinkstackoff", &debug.gcshrinkstackoff},
 	{"gcstackbarrieroff", &debug.gcstackbarrieroff},
+	{"gcstackbarrierall", &debug.gcstackbarrierall},
 	{"gcstoptheworld", &debug.gcstoptheworld},
 	{"gctrace", &debug.gctrace},
 	{"invalidptr", &debug.invalidptr},
@@ -340,6 +340,9 @@ var dbgvars = []dbgVar{
 }
 
 func parsedebugvars() {
+	// defaults
+	debug.invalidptr = 1
+
 	for p := gogetenv("GODEBUG"); p != ""; {
 		field := ""
 		i := index(p, ",")
@@ -375,6 +378,15 @@ func parsedebugvars() {
 		traceback_cache = 2<<1 | 1
 	default:
 		traceback_cache = uint32(atoi(p)) << 1
+	}
+	// when C owns the process, simply exit'ing the process on fatal errors
+	// and panics is surprising. Be louder and abort instead.
+	if islibrary || isarchive {
+		traceback_cache |= 1
+	}
+
+	if debug.gcstackbarrierall > 0 {
+		firstStackBarrierOffset = 0
 	}
 }
 

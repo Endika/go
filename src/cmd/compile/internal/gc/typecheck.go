@@ -89,37 +89,30 @@ func typekind(t *Type) string {
 	return fmt.Sprintf("etype=%d", et)
 }
 
-/*
- * sprint_depchain prints a dependency chain
- * of nodes into fmt.
- * It is used by typecheck in the case of OLITERAL nodes
- * to print constant definition loops.
- */
-func sprint_depchain(fmt_ *string, stack *NodeList, cur *Node, first *Node) {
-	for l := stack; l != nil; l = l.Next {
-		if l.N.Op == cur.Op {
-			if l.N != first {
-				sprint_depchain(fmt_, l.Next, l.N, first)
+// sprint_depchain prints a dependency chain of nodes into fmt.
+// It is used by typecheck in the case of OLITERAL nodes
+// to print constant definition loops.
+func sprint_depchain(fmt_ *string, stack []*Node, cur *Node, first *Node) {
+	for i := len(stack) - 1; i >= 0; i-- {
+		if n := stack[i]; n.Op == cur.Op {
+			if n != first {
+				sprint_depchain(fmt_, stack[:i], n, first)
 			}
-			*fmt_ += fmt.Sprintf("\n\t%v: %v uses %v", l.N.Line(), l.N, cur)
+			*fmt_ += fmt.Sprintf("\n\t%v: %v uses %v", n.Line(), n, cur)
 			return
 		}
 	}
 }
 
-/*
- * type check node *np.
- * replaces *np with a new pointer in some cases.
- * returns the final value of *np as a convenience.
- */
+var typecheck_tcstack []*Node
 
-var typecheck_tcstack *NodeList
-var typecheck_tcfree *NodeList
-
+// typecheck type checks node *np.
+// It replaces *np with a new pointer in some cases.
+// It returns the final value of *np as a convenience.
 func typecheck(np **Node, top int) *Node {
 	// cannot type check until all the source has been parsed
-	if typecheckok == 0 {
-		Fatal("early typecheck")
+	if !typecheckok {
+		Fatalf("early typecheck")
 	}
 
 	n := *np
@@ -168,16 +161,15 @@ func typecheck(np **Node, top int) *Node {
 				Yyerror("%v is not a type", n)
 				break
 			}
-
-			fmt_ = ""
 			sprint_depchain(&fmt_, typecheck_tcstack, n, n)
 			yyerrorl(int(n.Lineno), "constant definition loop%s", fmt_)
 		}
 
 		if nsavederrors+nerrors == 0 {
 			fmt_ = ""
-			for l := typecheck_tcstack; l != nil; l = l.Next {
-				fmt_ += fmt.Sprintf("\n\t%v %v", l.N.Line(), l.N)
+			for i := len(typecheck_tcstack) - 1; i >= 0; i-- {
+				x := typecheck_tcstack[i]
+				fmt_ += fmt.Sprintf("\n\t%v %v", x.Line(), x)
 			}
 			Yyerror("typechecking loop involving %v%s", n, fmt_)
 		}
@@ -188,27 +180,15 @@ func typecheck(np **Node, top int) *Node {
 
 	n.Typecheck = 2
 
-	var l *NodeList
-	if typecheck_tcfree != nil {
-		l = typecheck_tcfree
-		typecheck_tcfree = l.Next
-	} else {
-		l = new(NodeList)
-	}
-	l.Next = typecheck_tcstack
-	l.N = n
-	typecheck_tcstack = l
-
+	typecheck_tcstack = append(typecheck_tcstack, n)
 	typecheck1(&n, top)
 	*np = n
+
 	n.Typecheck = 1
 
-	if typecheck_tcstack != l {
-		Fatal("typecheck stack out of sync")
-	}
-	typecheck_tcstack = l.Next
-	l.Next = typecheck_tcfree
-	typecheck_tcfree = l
+	last := len(typecheck_tcstack) - 1
+	typecheck_tcstack[last] = nil
+	typecheck_tcstack = typecheck_tcstack[:last]
 
 	lineno = int32(lno)
 	return n
@@ -293,7 +273,7 @@ OpSwitch:
 	default:
 		Dump("typecheck", n)
 
-		Fatal("typecheck %v", Oconv(int(n.Op), 0))
+		Fatalf("typecheck %v", Oconv(int(n.Op), 0))
 
 		/*
 		 * names
@@ -820,7 +800,7 @@ OpSwitch:
 		}
 
 		if l.Orig != l && l.Op == ONAME {
-			Fatal("found non-orig name node %v", l)
+			Fatalf("found non-orig name node %v", l)
 		}
 		l.Addrtaken = true
 		if l.Name != nil && l.Name.Param != nil && l.Name.Param.Closure != nil {
@@ -1354,7 +1334,7 @@ OpSwitch:
 			tp := getthisx(t).Type.Type
 
 			if l.Left == nil || !Eqtype(l.Left.Type, tp) {
-				Fatal("method receiver")
+				Fatalf("method receiver")
 			}
 
 		default:
@@ -2008,7 +1988,7 @@ OpSwitch:
 			return
 		}
 		if t.Etype != TINTER {
-			Fatal("OITAB of %v", t)
+			Fatalf("OITAB of %v", t)
 		}
 		n.Type = Ptrto(Types[TUINTPTR])
 		break OpSwitch
@@ -2022,7 +2002,7 @@ OpSwitch:
 			return
 		}
 		if !Isslice(t) && t.Etype != TSTRING {
-			Fatal("OSPTR of %v", t)
+			Fatalf("OSPTR of %v", t)
 		}
 		if t.Etype == TSTRING {
 			n.Type = Ptrto(Types[TUINT8])
@@ -2527,12 +2507,12 @@ func lookdot(n *Node, t *Type, dostrcmp int) *Type {
 			Yyerror("%v is both field and method", n.Right.Sym)
 		}
 		if f1.Width == BADWIDTH {
-			Fatal("lookdot badwidth %v %p", f1, f1)
+			Fatalf("lookdot badwidth %v %p", f1, f1)
 		}
 		n.Xoffset = f1.Width
 		n.Type = f1.Type
 		if obj.Fieldtrack_enabled > 0 {
-			dotField[typeSym{t, s}] = f1
+			dotField[typeSym{t.Orig, s}] = f1
 		}
 		if t.Etype == TINTER {
 			if Isptr[n.Left.Type.Etype] {
@@ -2578,21 +2558,21 @@ func lookdot(n *Node, t *Type, dostrcmp int) *Type {
 					tt = tt.Type
 				}
 			} else {
-				Fatal("method mismatch: %v for %v", rcvr, tt)
+				Fatalf("method mismatch: %v for %v", rcvr, tt)
 			}
 		}
 
+		pll := n
 		ll := n.Left
-		for ll.Left != nil {
+		for ll.Left != nil && (ll.Op == ODOT || ll.Op == ODOTPTR || ll.Op == OIND) {
+			pll = ll
 			ll = ll.Left
 		}
-		if ll.Implicit {
-			if Isptr[ll.Type.Etype] && ll.Type.Sym != nil && ll.Type.Sym.Def != nil && ll.Type.Sym.Def.Op == OTYPE {
-				// It is invalid to automatically dereference a named pointer type when selecting a method.
-				// Make n->left == ll to clarify error message.
-				n.Left = ll
-				return nil
-			}
+		if pll.Implicit && Isptr[ll.Type.Etype] && ll.Type.Sym != nil && ll.Type.Sym.Def != nil && ll.Type.Sym.Def.Op == OTYPE {
+			// It is invalid to automatically dereference a named pointer type when selecting a method.
+			// Make n->left == ll to clarify error message.
+			n.Left = ll
+			return nil
 		}
 
 		n.Right = methodname(n.Right, n.Left.Type)
@@ -2820,7 +2800,7 @@ toomany:
  */
 func fielddup(n *Node, hash map[string]bool) {
 	if n.Op != ONAME {
-		Fatal("fielddup: not ONAME")
+		Fatalf("fielddup: not ONAME")
 	}
 	name := n.Sym.Name
 	if hash[name] {
@@ -2893,7 +2873,7 @@ func keydup(n *Node, hash map[uint32][]*Node) {
 
 func indexdup(n *Node, hash map[int64]*Node) {
 	if n.Op != OLITERAL {
-		Fatal("indexdup: not OLITERAL")
+		Fatalf("indexdup: not OLITERAL")
 	}
 
 	v := Mpgetfix(n.Val().U.(*Mpint))
@@ -3497,7 +3477,7 @@ func typecheckfunc(n *Node) {
 func stringtoarraylit(np **Node) {
 	n := *np
 	if n.Left.Op != OLITERAL || n.Left.Val().Ctype() != CTSTR {
-		Fatal("stringtoarraylit %v", n)
+		Fatalf("stringtoarraylit %v", n)
 	}
 
 	s := n.Left.Val().U.(string)
@@ -3709,7 +3689,7 @@ func typecheckdef(n *Node) *Node {
 			fmt.Printf(" %v", l.N.Sym)
 		}
 		fmt.Printf("\n")
-		Fatal("typecheckdef loop")
+		Fatalf("typecheckdef loop")
 	}
 
 	n.Walkdef = 2
@@ -3720,7 +3700,7 @@ func typecheckdef(n *Node) *Node {
 
 	switch n.Op {
 	default:
-		Fatal("typecheckdef %v", Oconv(int(n.Op), 0))
+		Fatalf("typecheckdef %v", Oconv(int(n.Op), 0))
 
 		// not really syms
 	case OGOTO, OLABEL:
@@ -3803,7 +3783,7 @@ func typecheckdef(n *Node) *Node {
 				break
 			}
 
-			Fatal("var without type, init: %v", n.Sym)
+			Fatalf("var without type, init: %v", n.Sym)
 		}
 
 		if n.Name.Defn.Op == ONAME {
@@ -3840,10 +3820,10 @@ func typecheckdef(n *Node) *Node {
 
 ret:
 	if n.Op != OLITERAL && n.Type != nil && isideal(n.Type) {
-		Fatal("got %v for %v", n.Type, n)
+		Fatalf("got %v for %v", n.Type, n)
 	}
 	if typecheckdefstack.N != n {
-		Fatal("typecheckdefstack mismatch")
+		Fatalf("typecheckdefstack mismatch")
 	}
 	l = typecheckdefstack
 	typecheckdefstack = l.Next

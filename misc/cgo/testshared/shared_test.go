@@ -143,6 +143,10 @@ func testMain(m *testing.M) (int, error) {
 }
 
 func TestMain(m *testing.M) {
+	// Some of the tests install binaries into a custom GOPATH.
+	// That won't work if GOBIN is set.
+	os.Unsetenv("GOBIN")
+
 	flag.Parse()
 	exitCode, err := testMain(m)
 	if err != nil {
@@ -456,24 +460,39 @@ func TestTwoGopathShlibs(t *testing.T) {
 	run(t, "executable linked to GOPATH library", "./bin/exe2")
 }
 
-// Build a GOPATH package into a shared library with gccgo and an executable that
-// links against it.
-func TestGoPathShlibGccgo(t *testing.T) {
+// If gccgo is not available or not new enough call t.Skip. Otherwise,
+// return a build.Context that is set up for gccgo.
+func prepGccgo(t *testing.T) build.Context {
 	gccgoName := os.Getenv("GCCGO")
 	if gccgoName == "" {
 		gccgoName = "gccgo"
 	}
-	_, err := exec.LookPath(gccgoName)
+	gccgoPath, err := exec.LookPath(gccgoName)
 	if err != nil {
 		t.Skip("gccgo not found")
 	}
-
-	libgoRE := regexp.MustCompile("libgo.so.[0-9]+")
-
+	cmd := exec.Command(gccgoPath, "-dumpversion")
+	output, err := cmd.CombinedOutput()
+	if err != nil {
+		t.Fatalf("%s -dumpversion failed: %v\n%s", gccgoPath, err, output)
+	}
+	if string(output) < "5" {
+		t.Skipf("gccgo too old (%s)", strings.TrimSpace(string(output)))
+	}
 	gccgoContext := build.Default
 	gccgoContext.InstallSuffix = suffix + "_fPIC"
 	gccgoContext.Compiler = "gccgo"
 	gccgoContext.GOPATH = os.Getenv("GOPATH")
+	return gccgoContext
+}
+
+// Build a GOPATH package into a shared library with gccgo and an executable that
+// links against it.
+func TestGoPathShlibGccgo(t *testing.T) {
+	gccgoContext := prepGccgo(t)
+
+	libgoRE := regexp.MustCompile("libgo.so.[0-9]+")
+
 	depP, err := gccgoContext.Import("dep", ".", build.ImportComment)
 	if err != nil {
 		t.Fatalf("import failed: %v", err)
@@ -493,21 +512,10 @@ func TestGoPathShlibGccgo(t *testing.T) {
 // library with gccgo, another GOPATH package that depends on the first and an
 // executable that links the second library.
 func TestTwoGopathShlibsGccgo(t *testing.T) {
-	gccgoName := os.Getenv("GCCGO")
-	if gccgoName == "" {
-		gccgoName = "gccgo"
-	}
-	_, err := exec.LookPath(gccgoName)
-	if err != nil {
-		t.Skip("gccgo not found")
-	}
+	gccgoContext := prepGccgo(t)
 
 	libgoRE := regexp.MustCompile("libgo.so.[0-9]+")
 
-	gccgoContext := build.Default
-	gccgoContext.InstallSuffix = suffix + "_fPIC"
-	gccgoContext.Compiler = "gccgo"
-	gccgoContext.GOPATH = os.Getenv("GOPATH")
 	depP, err := gccgoContext.Import("dep", ".", build.ImportComment)
 	if err != nil {
 		t.Fatalf("import failed: %v", err)

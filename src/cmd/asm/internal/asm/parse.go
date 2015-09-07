@@ -8,6 +8,7 @@ package asm
 
 import (
 	"fmt"
+	"io"
 	"log"
 	"os"
 	"strconv"
@@ -37,6 +38,7 @@ type Parser struct {
 	firstProg     *obj.Prog
 	lastProg      *obj.Prog
 	dataAddr      map[string]int64 // Most recent address for DATA for this symbol.
+	errorWriter   io.Writer
 }
 
 type Patch struct {
@@ -46,11 +48,12 @@ type Patch struct {
 
 func NewParser(ctxt *obj.Link, ar *arch.Arch, lexer lex.TokenReader) *Parser {
 	return &Parser{
-		ctxt:     ctxt,
-		arch:     ar,
-		lex:      lexer,
-		labels:   make(map[string]*obj.Prog),
-		dataAddr: make(map[string]int64),
+		ctxt:        ctxt,
+		arch:        ar,
+		lex:         lexer,
+		labels:      make(map[string]*obj.Prog),
+		dataAddr:    make(map[string]int64),
+		errorWriter: os.Stderr,
 	}
 }
 
@@ -67,10 +70,12 @@ func (p *Parser) errorf(format string, args ...interface{}) {
 		return
 	}
 	p.errorLine = p.histLineNum
-	// Put file and line information on head of message.
-	format = "%s:%d: " + format + "\n"
-	args = append([]interface{}{p.lex.File(), p.lineNum}, args...)
-	fmt.Fprintf(os.Stderr, format, args...)
+	if p.lex != nil {
+		// Put file and line information on head of message.
+		format = "%s:%d: " + format + "\n"
+		args = append([]interface{}{p.lex.File(), p.lineNum}, args...)
+	}
+	fmt.Fprintf(p.errorWriter, format, args...)
 	p.errorCount++
 	if p.errorCount > 10 {
 		log.Fatal("too many errors")
@@ -467,12 +472,12 @@ func (p *Parser) register(name string, prefix rune) (r1, r2 int16, scale int8, o
 		switch p.next().ScanToken {
 		case ',':
 			if char != '5' && char != '7' {
-				p.errorf("illegal register pair syntax")
+				p.errorf("(register,register) not supported on this architecture")
 				return
 			}
 		case '+':
 			if char != '9' {
-				p.errorf("illegal register pair syntax")
+				p.errorf("(register+register) not supported on this architecture")
 				return
 			}
 		}
@@ -605,7 +610,7 @@ func (p *Parser) setPseudoRegister(addr *obj.Addr, reg string, isStatic bool, pr
 
 // registerIndirect parses the general form of a register indirection.
 // It is can be (R1), (R2*scale), or (R1)(R2*scale) where R1 may be a simple
-// register or register pair R:R or (R, R).
+// register or register pair R:R or (R, R) or (R+R).
 // Or it might be a pseudo-indirection like (FP).
 // We are sitting on the opening parenthesis.
 func (p *Parser) registerIndirect(a *obj.Addr, prefix rune) {
@@ -648,9 +653,9 @@ func (p *Parser) registerIndirect(a *obj.Addr, prefix rune) {
 			return
 		}
 		if p.arch.Thechar == '9' {
-			// Special form for PPC64: register pair (R1+R2).
+			// Special form for PPC64: (R1+R2); alias for (R1)(R2*1).
 			if prefix != 0 || scale != 0 {
-				p.errorf("illegal address mode for register pair")
+				p.errorf("illegal address mode for register+register")
 				return
 			}
 			a.Type = obj.TYPE_MEM
@@ -697,12 +702,19 @@ func (p *Parser) registerIndirect(a *obj.Addr, prefix rune) {
 // The opening bracket has been consumed.
 func (p *Parser) registerList(a *obj.Addr) {
 	// One range per loop.
+	const maxReg = 16
 	var bits uint16
+ListLoop:
 	for {
 		tok := p.next()
-		if tok.ScanToken == ']' {
-			break
+		switch tok.ScanToken {
+		case ']':
+			break ListLoop
+		case scanner.EOF:
+			p.errorf("missing ']' in register list")
+			return
 		}
+		// Parse the upper and lower bounds.
 		lo := p.registerNumber(tok.String())
 		hi := lo
 		if p.peek() == '-' {
@@ -712,7 +724,8 @@ func (p *Parser) registerList(a *obj.Addr) {
 		if hi < lo {
 			lo, hi = hi, lo
 		}
-		for lo <= hi {
+		// Check there are no duplicates in the register list.
+		for i := 0; lo <= hi && i < maxReg; i++ {
 			if bits&(1<<lo) != 0 {
 				p.errorf("register R%d already in list", lo)
 			}
@@ -734,12 +747,19 @@ func (p *Parser) registerNumber(name string) uint16 {
 	}
 	if name[0] != 'R' {
 		p.errorf("expected g or R0 through R15; found %s", name)
+		return 0
 	}
 	r, ok := p.registerReference(name)
 	if !ok {
 		return 0
 	}
-	return uint16(r - p.arch.Register["R0"])
+	reg := r - p.arch.Register["R0"]
+	if reg < 0 {
+		// Could happen for an architecture having other registers prefixed by R
+		p.errorf("expected g or R0 through R15; found %s", name)
+		return 0
+	}
+	return uint16(reg)
 }
 
 // Note: There are two changes in the expression handling here

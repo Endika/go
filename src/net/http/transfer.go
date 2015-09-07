@@ -430,7 +430,6 @@ func fixTransferEncoding(isResponse bool, requestMethod string, header Header) (
 	if !present {
 		return nil, nil
 	}
-	isRequest := !isResponse
 	delete(header, "Transfer-Encoding")
 
 	encodings := strings.Split(raw[0], ",")
@@ -458,12 +457,20 @@ func fixTransferEncoding(isResponse bool, requestMethod string, header Header) (
 		// RFC 7230 3.3.2 says "A sender MUST NOT send a
 		// Content-Length header field in any message that
 		// contains a Transfer-Encoding header field."
-		if len(header["Content-Length"]) > 0 {
-			if isRequest {
-				return nil, errors.New("http: invalid Content-Length with Transfer-Encoding")
-			}
-			delete(header, "Content-Length")
-		}
+		//
+		// but also:
+		// "If a message is received with both a
+		// Transfer-Encoding and a Content-Length header
+		// field, the Transfer-Encoding overrides the
+		// Content-Length. Such a message might indicate an
+		// attempt to perform request smuggling (Section 9.5)
+		// or response splitting (Section 9.4) and ought to be
+		// handled as an error. A sender MUST remove the
+		// received Content-Length field prior to forwarding
+		// such a message downstream."
+		//
+		// Reportedly, these appear in the wild.
+		delete(header, "Content-Length")
 		return te, nil
 	}
 
@@ -630,6 +637,12 @@ func (b *body) readLocked(p []byte) (n int, err error) {
 		if b.hdr != nil {
 			if e := b.readTrailer(); e != nil {
 				err = e
+				// Something went wrong in the trailer, we must not allow any
+				// further reads of any kind to succeed from body, nor any
+				// subsequent requests on the server connection. See
+				// golang.org/issue/12027
+				b.sawEOF = false
+				b.closed = true
 			}
 			b.hdr = nil
 		} else {
@@ -728,6 +741,16 @@ func mergeSetHeader(dst *Header, src Header) {
 	for k, vv := range src {
 		(*dst)[k] = vv
 	}
+}
+
+// unreadDataSizeLocked returns the number of bytes of unread input.
+// It returns -1 if unknown.
+// b.mu must be held.
+func (b *body) unreadDataSizeLocked() int64 {
+	if lr, ok := b.src.(*io.LimitedReader); ok {
+		return lr.N
+	}
+	return -1
 }
 
 func (b *body) Close() error {
