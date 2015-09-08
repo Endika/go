@@ -160,13 +160,12 @@ type Type struct {
 	Trecur      uint8 // to detect loops
 	Printed     uint8
 	Embedded    uint8 // TFIELD embedded type
-	Siggen      uint8
 	Funarg      uint8 // on TSTRUCT and TFIELD
 	Copyany     uint8
 	Local       bool // created in this file
 	Deferwidth  uint8
-	Broke       uint8 // broken type definition.
-	Isddd       bool  // TFIELD is ... argument
+	Broke       bool // broken type definition.
+	Isddd       bool // TFIELD is ... argument
 	Align       uint8
 	Haspointers uint8 // 0 unknown, 1 no, 2 yes
 
@@ -217,7 +216,6 @@ type Type struct {
 }
 
 type Label struct {
-	Used uint8
 	Sym  *Sym
 	Def  *Node
 	Use  []*Node
@@ -228,6 +226,8 @@ type Label struct {
 	Labelpc  *obj.Prog // pointer to code
 	Breakpc  *obj.Prog // pointer to code
 	Continpc *obj.Prog // pointer to code
+
+	Used bool
 }
 
 type InitEntry struct {
@@ -588,7 +588,7 @@ var externdcl *NodeList
 
 var exportlist []*Node
 
-var importlist *NodeList // imported functions and methods with inlinable bodies
+var importlist []*Node // imported functions and methods with inlinable bodies
 
 var funcsyms *NodeList
 
@@ -616,7 +616,7 @@ var blockgen int32 // max block number
 
 var block int32 // current block number
 
-var Hasdefer int // flag that curfn has defer statetment
+var hasdefer bool // flag that curfn has defer statement
 
 var Curfn *Node
 
