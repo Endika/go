@@ -2,11 +2,12 @@
 // Use of this source code is governed by a BSD-style
 // license that can be found in the LICENSE file.
 
-package obj
+// +build !arm,gc
 
-const (
-	AEXIST = 0
-	BOM    = 0xFEFF
-)
+#include "textflag.h"
 
-var GOEXPERIMENT string
+TEXT ·useVFPv1(SB),NOSPLIT,$0
+	RET
+
+TEXT ·useVFPv3(SB),NOSPLIT,$0
+	RET

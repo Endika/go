@@ -319,6 +319,7 @@ func Main() {
 	dclcontext = PEXTERN
 	nerrors = 0
 	lexlineno = 1
+	const BOM = 0xFEFF
 
 	for _, infile = range flag.Args() {
 		linehistpush(infile)
@@ -338,7 +339,7 @@ func Main() {
 		curio.last = 0
 
 		// Skip initial BOM if present.
-		if obj.Bgetrune(curio.bin) != obj.BOM {
+		if obj.Bgetrune(curio.bin) != BOM {
 			obj.Bungetrune(curio.bin)
 		}
 
@@ -601,11 +602,11 @@ func findpkg(name string) (file string, ok bool) {
 		// if there is an array.6 in the array.a library,
 		// want to find all of array.a, not just array.6.
 		file = fmt.Sprintf("%s.a", name)
-		if obj.Access(file, 0) >= 0 {
+		if _, err := os.Stat(file); err == nil {
 			return file, true
 		}
 		file = fmt.Sprintf("%s.o", name)
-		if obj.Access(file, 0) >= 0 {
+		if _, err := os.Stat(file); err == nil {
 			return file, true
 		}
 		return "", false
@@ -623,11 +624,11 @@ func findpkg(name string) (file string, ok bool) {
 
 	for p := idirs; p != nil; p = p.link {
 		file = fmt.Sprintf("%s/%s.a", p.dir, name)
-		if obj.Access(file, 0) >= 0 {
+		if _, err := os.Stat(file); err == nil {
 			return file, true
 		}
 		file = fmt.Sprintf("%s/%s.o", p.dir, name)
-		if obj.Access(file, 0) >= 0 {
+		if _, err := os.Stat(file); err == nil {
 			return file, true
 		}
 	}
@@ -644,11 +645,11 @@ func findpkg(name string) (file string, ok bool) {
 		}
 
 		file = fmt.Sprintf("%s/pkg/%s_%s%s%s/%s.a", goroot, goos, goarch, suffixsep, suffix, name)
-		if obj.Access(file, 0) >= 0 {
+		if _, err := os.Stat(file); err == nil {
 			return file, true
 		}
 		file = fmt.Sprintf("%s/pkg/%s_%s%s%s/%s.o", goroot, goos, goarch, suffixsep, suffix, name)
-		if obj.Access(file, 0) >= 0 {
+		if _, err := os.Stat(file); err == nil {
 			return file, true
 		}
 	}
@@ -744,7 +745,7 @@ func importfile(f *Val, line int) {
 
 	// If we already saw that package, feed a dummy statement
 	// to the lexer to avoid parsing export data twice.
-	if importpkg.Imported != 0 {
+	if importpkg.Imported {
 		tag := ""
 		if importpkg.Safe {
 			tag = "safe"
@@ -755,7 +756,7 @@ func importfile(f *Val, line int) {
 		return
 	}
 
-	importpkg.Imported = 1
+	importpkg.Imported = true
 
 	var err error
 	var imp *obj.Biobuf
@@ -2288,20 +2289,20 @@ func lexinit1() {
 
 	rcvr.Type = typ(TFIELD)
 	rcvr.Type.Type = Ptrto(typ(TSTRUCT))
-	rcvr.Funarg = 1
+	rcvr.Funarg = true
 	in := typ(TSTRUCT)
-	in.Funarg = 1
+	in.Funarg = true
 	out := typ(TSTRUCT)
 	out.Type = typ(TFIELD)
 	out.Type.Type = Types[TSTRING]
-	out.Funarg = 1
+	out.Funarg = true
 	f := typ(TFUNC)
 	*getthis(f) = rcvr
 	*Getoutarg(f) = out
 	*getinarg(f) = in
 	f.Thistuple = 1
 	f.Intuple = 0
-	f.Outnamed = 0
+	f.Outnamed = false
 	f.Outtuple = 1
 	t := typ(TINTER)
 	t.Type = typ(TFIELD)

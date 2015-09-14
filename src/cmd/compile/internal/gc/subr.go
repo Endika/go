@@ -59,26 +59,21 @@ func adderr(line int, format string, args ...interface{}) {
 	})
 }
 
+// errcmp sorts errors by line, then seq, then message.
 type errcmp []Error
 
-func (x errcmp) Len() int {
-	return len(x)
-}
-
-func (x errcmp) Swap(i, j int) {
-	x[i], x[j] = x[j], x[i]
-}
-
+func (x errcmp) Len() int      { return len(x) }
+func (x errcmp) Swap(i, j int) { x[i], x[j] = x[j], x[i] }
 func (x errcmp) Less(i, j int) bool {
 	a := &x[i]
 	b := &x[j]
 	if a.lineno != b.lineno {
-		return a.lineno-b.lineno < 0
+		return a.lineno < b.lineno
 	}
 	if a.seq != b.seq {
-		return a.seq-b.seq < 0
+		return a.seq < b.seq
 	}
-	return stringsCompare(a.msg, b.msg) < 0
+	return a.msg < b.msg
 }
 
 func Flusherrors() {
@@ -86,7 +81,7 @@ func Flusherrors() {
 	if len(errors) == 0 {
 		return
 	}
-	sort.Sort(errcmp(errors[:len(errors)]))
+	sort.Sort(errcmp(errors))
 	for i := 0; i < len(errors); i++ {
 		if i == 0 || errors[i].msg != errors[i-1].msg {
 			fmt.Printf("%s", errors[i].msg)
@@ -429,7 +424,7 @@ func algtype1(t *Type, bad **Type) int {
 	if t.Broke {
 		return AMEM
 	}
-	if t.Noalg != 0 {
+	if t.Noalg {
 		return ANOEQ
 	}
 
@@ -1385,7 +1380,7 @@ func substAny(tp **Type, types *[]*Type) {
 		if t == nil {
 			return
 		}
-		if t.Etype == TANY && t.Copyany != 0 {
+		if t.Etype == TANY && t.Copyany {
 			if len(*types) == 0 {
 				Fatalf("substArgTypes: not enough argument types")
 			}
@@ -1486,7 +1481,7 @@ func deep(t *Type) *Type {
 
 	case TANY:
 		nt = shallow(t)
-		nt.Copyany = 1
+		nt.Copyany = true
 
 	case TPTR32, TPTR64, TCHAN, TARRAY:
 		nt = shallow(t)
@@ -2163,17 +2158,17 @@ func adddot(n *Node) *Node {
  */
 type Symlink struct {
 	field     *Type
-	good      uint8
-	followptr uint8
 	link      *Symlink
+	good      bool
+	followptr bool
 }
 
 var slist *Symlink
 
-func expand0(t *Type, followptr int) {
+func expand0(t *Type, followptr bool) {
 	u := t
 	if Isptr[u.Etype] {
-		followptr = 1
+		followptr = true
 		u = u.Type
 	}
 
@@ -2187,7 +2182,7 @@ func expand0(t *Type, followptr int) {
 			sl = new(Symlink)
 			sl.field = f
 			sl.link = slist
-			sl.followptr = uint8(followptr)
+			sl.followptr = followptr
 			slist = sl
 		}
 
@@ -2205,13 +2200,13 @@ func expand0(t *Type, followptr int) {
 			sl = new(Symlink)
 			sl.field = f
 			sl.link = slist
-			sl.followptr = uint8(followptr)
+			sl.followptr = followptr
 			slist = sl
 		}
 	}
 }
 
-func expand1(t *Type, d int, followptr int) {
+func expand1(t *Type, d int, followptr bool) {
 	if t.Trecur != 0 {
 		return
 	}
@@ -2226,7 +2221,7 @@ func expand1(t *Type, d int, followptr int) {
 
 	u := t
 	if Isptr[u.Etype] {
-		followptr = 1
+		followptr = true
 		u = u.Type
 	}
 
@@ -2263,7 +2258,7 @@ func expandmeth(t *Type) {
 	// generate all reachable methods
 	slist = nil
 
-	expand1(t, len(dotlist)-1, 0)
+	expand1(t, len(dotlist)-1, false)
 
 	// check each method to be uniquely reachable
 	var c int
@@ -2278,7 +2273,7 @@ func expandmeth(t *Type) {
 			if c == 1 {
 				// addot1 may have dug out arbitrary fields, we only want methods.
 				if f.Type.Etype == TFUNC && f.Type.Thistuple > 0 {
-					sl.good = 1
+					sl.good = true
 					sl.field = f
 				}
 			}
@@ -2293,13 +2288,13 @@ func expandmeth(t *Type) {
 
 	t.Xmethod = t.Method
 	for sl := slist; sl != nil; sl = sl.link {
-		if sl.good != 0 {
+		if sl.good {
 			// add it to the base type method list
 			f = typ(TFIELD)
 
 			*f = *sl.field
 			f.Embedded = 1 // needs a trampoline
-			if sl.followptr != 0 {
+			if sl.followptr {
 				f.Embedded = 2
 			}
 			f.Down = t.Xmethod
@@ -2968,8 +2963,8 @@ func geneq(sym *Sym, t *Type) {
 	safemode = old_safemode
 }
 
-func ifacelookdot(s *Sym, t *Type, followptr *int, ignorecase int) *Type {
-	*followptr = 0
+func ifacelookdot(s *Sym, t *Type, followptr *bool, ignorecase int) *Type {
+	*followptr = false
 
 	if t == nil {
 		return nil
@@ -2988,7 +2983,7 @@ func ifacelookdot(s *Sym, t *Type, followptr *int, ignorecase int) *Type {
 		if c == 1 {
 			for i = 0; i < d; i++ {
 				if Isptr[dotlist[i].field.Type.Etype] {
-					*followptr = 1
+					*followptr = true
 					break
 				}
 			}
@@ -3046,7 +3041,7 @@ func implements(t *Type, iface *Type, m **Type, samename **Type, ptr *int) bool 
 	}
 	var tm *Type
 	var imtype *Type
-	var followptr int
+	var followptr bool
 	var rcvr *Type
 	for im := iface.Type; im != nil; im = im.Down {
 		imtype = methodfunc(im.Type, nil)
@@ -3065,7 +3060,7 @@ func implements(t *Type, iface *Type, m **Type, samename **Type, ptr *int) bool 
 		// the method does not exist for value types.
 		rcvr = getthisx(tm.Type).Type.Type
 
-		if Isptr[rcvr.Etype] && !Isptr[t0.Etype] && followptr == 0 && !isifacemethod(tm.Type) {
+		if Isptr[rcvr.Etype] && !Isptr[t0.Etype] && !followptr && !isifacemethod(tm.Type) {
 			if false && Debug['r'] != 0 {
 				Yyerror("interface pointer mismatch")
 			}

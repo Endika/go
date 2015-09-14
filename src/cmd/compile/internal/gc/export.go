@@ -79,12 +79,12 @@ func autoexport(n *Node, ctxt uint8) {
 }
 
 func dumppkg(p *Pkg) {
-	if p == nil || p == localpkg || p.Exported != 0 || p == builtinpkg {
+	if p == nil || p == localpkg || p.Exported || p == builtinpkg {
 		return
 	}
-	p.Exported = 1
+	p.Exported = true
 	suffix := ""
-	if p.Direct == 0 {
+	if !p.Direct {
 		suffix = " // indirect"
 	}
 	fmt.Fprintf(bout, "\timport %s %q%s\n", p.Name, p.Path, suffix)
@@ -273,10 +273,10 @@ func dumpexporttype(t *Type) {
 	if t == nil {
 		return
 	}
-	if t.Printed != 0 || t == Types[t.Etype] || t == bytetype || t == runetype || t == errortype {
+	if t.Printed || t == Types[t.Etype] || t == bytetype || t == runetype || t == errortype {
 		return
 	}
-	t.Printed = 1
+	t.Printed = true
 
 	if t.Sym != nil && t.Etype != TFIELD {
 		dumppkg(t.Sym.Pkg)
@@ -371,7 +371,7 @@ func dumpexport() {
 	fmt.Fprintf(bout, "\n")
 
 	for _, p := range pkgs {
-		if p.Direct != 0 {
+		if p.Direct {
 			dumppkg(p)
 		}
 	}
@@ -548,7 +548,7 @@ func dumpasmhdr() {
 
 		case OTYPE:
 			t = n.Type
-			if t.Etype != TSTRUCT || t.Map != nil || t.Funarg != 0 {
+			if t.Etype != TSTRUCT || t.Map != nil || t.Funarg {
 				break
 			}
 			fmt.Fprintf(b, "#define %s__size %d\n", t.Sym.Name, int(t.Width))

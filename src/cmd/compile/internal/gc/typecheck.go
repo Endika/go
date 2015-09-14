@@ -18,7 +18,7 @@ import (
  * marks variables that escape the local frame.
  * rewrites n->op to be more specific in some cases.
  */
-var typecheckdefstack *NodeList
+var typecheckdefstack []*Node
 
 /*
  * resolve ONONAME to definition, if any.
@@ -1621,7 +1621,7 @@ OpSwitch:
 
 		// Unpack multiple-return result before type-checking.
 		var funarg *Type
-		if Istype(t, TSTRUCT) && t.Funarg != 0 {
+		if Istype(t, TSTRUCT) && t.Funarg {
 			funarg = t
 			t = t.Type.Type
 		}
@@ -2117,7 +2117,7 @@ OpSwitch:
 			return
 		}
 
-		if Curfn.Type.Outnamed != 0 && n.List == nil {
+		if Curfn.Type.Outnamed && n.List == nil {
 			break OpSwitch
 		}
 		typecheckaste(ORETURN, nil, false, getoutargx(Curfn.Type), n.List, func() string { return "return argument" })
@@ -2173,7 +2173,7 @@ OpSwitch:
 	}
 
 	t := n.Type
-	if t != nil && t.Funarg == 0 && n.Op != OTYPE {
+	if t != nil && !t.Funarg && n.Op != OTYPE {
 		switch t.Etype {
 		case TFUNC, // might have TANY; wait until its called
 			TANY,
@@ -2635,7 +2635,7 @@ func typecheckaste(op int, call *Node, isddd bool, tstruct *Type, nl *NodeList, 
 	if nl != nil && nl.Next == nil {
 		n = nl.N
 		if n.Type != nil {
-			if n.Type.Etype == TSTRUCT && n.Type.Funarg != 0 {
+			if n.Type.Etype == TSTRUCT && n.Type.Funarg {
 				if !hasddd(tstruct) {
 					n1 := downcount(tstruct)
 					n2 := downcount(n.Type)
@@ -2854,12 +2854,17 @@ func keydup(n *Node, hash map[uint32][]*Node) {
 			if Eqtype(a.Left.Type, n.Type) {
 				cmp.Right = a.Left
 				evconst(&cmp)
-				b = uint32(obj.Bool2int(cmp.Val().U.(bool)))
+				if cmp.Op == OLITERAL {
+					// Sometimes evconst fails.  See issue 12536.
+					b = uint32(obj.Bool2int(cmp.Val().U.(bool)))
+				}
 			}
 		} else if Eqtype(a.Type, n.Type) {
 			cmp.Right = a
 			evconst(&cmp)
-			b = uint32(obj.Bool2int(cmp.Val().U.(bool)))
+			if cmp.Op == OLITERAL {
+				b = uint32(obj.Bool2int(cmp.Val().U.(bool)))
+			}
 		}
 
 		if b != 0 {
@@ -3375,7 +3380,7 @@ func typecheckas2(n *Node) {
 		}
 		switch r.Op {
 		case OCALLMETH, OCALLINTER, OCALLFUNC:
-			if r.Type.Etype != TSTRUCT || r.Type.Funarg == 0 {
+			if r.Type.Etype != TSTRUCT || !r.Type.Funarg {
 				break
 			}
 			cr = structcount(r.Type)
@@ -3539,7 +3544,7 @@ var mapqueue *NodeList
 func copytype(n *Node, t *Type) {
 	if t.Etype == TFORW {
 		// This type isn't computed yet; when it is, update n.
-		t.Copyto = list(t.Copyto, n)
+		t.Copyto = append(t.Copyto, n)
 
 		return
 	}
@@ -3559,13 +3564,13 @@ func copytype(n *Node, t *Type) {
 	t.Method = nil
 	t.Xmethod = nil
 	t.Nod = nil
-	t.Printed = 0
-	t.Deferwidth = 0
+	t.Printed = false
+	t.Deferwidth = false
 	t.Copyto = nil
 
 	// Update nodes waiting on this type.
-	for ; l != nil; l = l.Next {
-		copytype(l.N, t)
+	for _, n := range l {
+		copytype(n, t)
 	}
 
 	// Double-check use of type as embedded type.
@@ -3674,16 +3679,13 @@ func typecheckdef(n *Node) *Node {
 		return n
 	}
 
-	l := new(NodeList)
-	l.N = n
-	l.Next = typecheckdefstack
-	typecheckdefstack = l
-
+	typecheckdefstack = append(typecheckdefstack, n)
 	if n.Walkdef == 2 {
 		Flusherrors()
 		fmt.Printf("typecheckdef loop:")
-		for l := typecheckdefstack; l != nil; l = l.Next {
-			fmt.Printf(" %v", l.N.Sym)
+		for i := len(typecheckdefstack) - 1; i >= 0; i-- {
+			n := typecheckdefstack[i]
+			fmt.Printf(" %v", n.Sym)
 		}
 		fmt.Printf("\n")
 		Fatalf("typecheckdef loop")
@@ -3819,11 +3821,12 @@ ret:
 	if n.Op != OLITERAL && n.Type != nil && isideal(n.Type) {
 		Fatalf("got %v for %v", n.Type, n)
 	}
-	if typecheckdefstack.N != n {
+	last := len(typecheckdefstack) - 1
+	if typecheckdefstack[last] != n {
 		Fatalf("typecheckdefstack mismatch")
 	}
-	l = typecheckdefstack
-	typecheckdefstack = l.Next
+	typecheckdefstack[last] = nil
+	typecheckdefstack = typecheckdefstack[:last]
 
 	lineno = int32(lno)
 	n.Walkdef = 1

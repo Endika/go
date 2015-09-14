@@ -125,9 +125,9 @@ type Pkg struct {
 	Path     string // string literal used in import statement
 	Pathsym  *Sym
 	Prefix   string // escaped path for use in symbol table
-	Imported uint8  // export data of this package was parsed
-	Exported int8   // import line written in export data
-	Direct   int8   // imported directly
+	Imported bool   // export data of this package was parsed
+	Exported bool   // import line written in export data
+	Direct   bool   // imported directly
 	Safe     bool   // whether the package is marked as safe
 	Syms     map[string]*Sym
 }
@@ -155,15 +155,15 @@ type Sym struct {
 type Type struct {
 	Etype       uint8
 	Nointerface bool
-	Noalg       uint8
+	Noalg       bool
 	Chan        uint8
 	Trecur      uint8 // to detect loops
-	Printed     uint8
+	Printed     bool
 	Embedded    uint8 // TFIELD embedded type
-	Funarg      uint8 // on TSTRUCT and TFIELD
-	Copyany     uint8
+	Funarg      bool  // on TSTRUCT and TFIELD
+	Copyany     bool
 	Local       bool // created in this file
-	Deferwidth  uint8
+	Deferwidth  bool
 	Broke       bool // broken type definition.
 	Isddd       bool // TFIELD is ... argument
 	Align       uint8
@@ -177,7 +177,7 @@ type Type struct {
 	Thistuple int
 	Outtuple  int
 	Intuple   int
-	Outnamed  uint8
+	Outnamed  bool
 
 	Method  *Type
 	Xmethod *Type
@@ -210,7 +210,7 @@ type Type struct {
 	Embedlineno int32 // first use of TFORW as embedded type
 
 	// for TFORW, where to copy the eventual value to
-	Copyto *NodeList
+	Copyto []*Node
 
 	Lastfn *Node // for usefield
 }
@@ -699,7 +699,7 @@ type Flow struct {
 	Id     int32  // sequence number in flow graph
 	Rpo    int32  // reverse post ordering
 	Loop   uint16 // x5 for every loop
-	Refset uint8  // diagnostic generated
+	Refset bool   // diagnostic generated
 
 	Data interface{} // for use by client
 }

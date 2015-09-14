@@ -337,6 +337,7 @@ var execTests = []execTest{
 	{"if not .BinaryFunc call", "{{ if not .BinaryFunc}}{{call .BinaryFunc `1` `2`}}{{else}}No{{end}}", "No", tVal, true},
 	{"Interface Call", `{{stringer .S}}`, "foozle", map[string]interface{}{"S": bytes.NewBufferString("foozle")}, true},
 	{".ErrFunc", "{{call .ErrFunc}}", "bla", tVal, true},
+	{"call nil", "{{call nil}}", "", tVal, false},
 
 	// Erroneous function calls (check args).
 	{".BinaryFuncTooFew", "{{call .BinaryFunc `1`}}", "", tVal, false},
@@ -425,12 +426,15 @@ var execTests = []execTest{
 	{"slice[1]", "{{index .SI 1}}", "4", tVal, true},
 	{"slice[HUGE]", "{{index .SI 10}}", "", tVal, false},
 	{"slice[WRONG]", "{{index .SI `hello`}}", "", tVal, false},
+	{"slice[nil]", "{{index .SI nil}}", "", tVal, false},
 	{"map[one]", "{{index .MSI `one`}}", "1", tVal, true},
 	{"map[two]", "{{index .MSI `two`}}", "2", tVal, true},
 	{"map[NO]", "{{index .MSI `XXX`}}", "0", tVal, true},
-	{"map[nil]", "{{index .MSI nil}}", "0", tVal, true},
+	{"map[nil]", "{{index .MSI nil}}", "", tVal, false},
+	{"map[``]", "{{index .MSI ``}}", "0", tVal, true},
 	{"map[WRONG]", "{{index .MSI 10}}", "", tVal, false},
 	{"double index", "{{index .SMSI 1 `eleven`}}", "11", tVal, true},
+	{"nil[1]", "{{index nil 1}}", "", tVal, false},
 
 	// Len.
 	{"slice", "{{len .SI}}", "3", tVal, true},
@@ -797,18 +801,19 @@ type Tree struct {
 }
 
 // Use different delimiters to test Set.Delims.
+// Also test the trimming of leading and trailing spaces.
 const treeTemplate = `
-	(define "tree")
+	(- define "tree" -)
 	[
-		(.Val)
-		(with .Left)
-			(template "tree" .)
-		(end)
-		(with .Right)
-			(template "tree" .)
-		(end)
+		(- .Val -)
+		(- with .Left -)
+			(template "tree" . -)
+		(- end -)
+		(- with .Right -)
+			(- template "tree" . -)
+		(- end -)
 	]
-	(end)
+	(- end -)
 `
 
 func TestTree(t *testing.T) {
@@ -853,19 +858,13 @@ func TestTree(t *testing.T) {
 		t.Fatal("parse error:", err)
 	}
 	var b bytes.Buffer
-	stripSpace := func(r rune) rune {
-		if r == '\t' || r == '\n' {
-			return -1
-		}
-		return r
-	}
 	const expect = "[1[2[3[4]][5[6]]][7[8[9]][10[11]]]]"
 	// First by looking up the template.
 	err = tmpl.Lookup("tree").Execute(&b, tree)
 	if err != nil {
 		t.Fatal("exec error:", err)
 	}
-	result := strings.Map(stripSpace, b.String())
+	result := b.String()
 	if result != expect {
 		t.Errorf("expected %q got %q", expect, result)
 	}
@@ -875,7 +874,7 @@ func TestTree(t *testing.T) {
 	if err != nil {
 		t.Fatal("exec error:", err)
 	}
-	result = strings.Map(stripSpace, b.String())
+	result = b.String()
 	if result != expect {
 		t.Errorf("expected %q got %q", expect, result)
 	}
