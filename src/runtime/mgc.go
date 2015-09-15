@@ -126,12 +126,14 @@ const (
 	_DebugGC         = 0
 	_ConcurrentSweep = true
 	_FinBlockSize    = 4 * 1024
+
 	_RootData        = 0
 	_RootBss         = 1
 	_RootFinalizers  = 2
-	_RootSpans       = 3
-	_RootFlushCaches = 4
-	_RootCount       = 5
+	_RootFlushCaches = 3
+	_RootSpans0      = 4
+	_RootSpansShards = 128
+	_RootCount       = _RootSpans0 + _RootSpansShards
 
 	// sweepMinHeapDistance is a lower bound on the heap distance
 	// (in bytes) reserved for concurrent sweeping between GC
