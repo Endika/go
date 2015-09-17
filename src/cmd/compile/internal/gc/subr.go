@@ -122,7 +122,7 @@ func Yyerror(format string, args ...interface{}) {
 
 		// An unexpected EOF caused a syntax error. Use the previous
 		// line number since getc generated a fake newline character.
-		if curio.eofnl != 0 {
+		if curio.eofnl {
 			lexlineno = prevlineno
 		}
 
@@ -345,23 +345,6 @@ func importdot(opkg *Pkg, pack *Node) {
 		// can't possibly be used - there were no symbols
 		yyerrorl(int(pack.Lineno), "imported and not used: %q", opkg.Path)
 	}
-}
-
-func gethunk() {
-	nh := int32(NHUNK)
-	if thunk >= 10*NHUNK {
-		nh = 10 * NHUNK
-	}
-	h := string(make([]byte, nh))
-	if h == "" {
-		Flusherrors()
-		Yyerror("out of memory")
-		errorexit()
-	}
-
-	hunk = h
-	nhunk = nh
-	thunk += nh
 }
 
 func Nod(op int, nleft *Node, nright *Node) *Node {
@@ -607,16 +590,11 @@ func typ(et int) *Type {
 	return t
 }
 
+// methcmp sorts by symbol, then by package path for unexported symbols.
 type methcmp []*Type
 
-func (x methcmp) Len() int {
-	return len(x)
-}
-
-func (x methcmp) Swap(i, j int) {
-	x[i], x[j] = x[j], x[i]
-}
-
+func (x methcmp) Len() int      { return len(x) }
+func (x methcmp) Swap(i, j int) { x[i], x[j] = x[j], x[i] }
 func (x methcmp) Less(i, j int) bool {
 	a := x[i]
 	b := x[j]
@@ -627,16 +605,14 @@ func (x methcmp) Less(i, j int) bool {
 		return true
 	}
 	if b.Sym == nil {
-		return 1 < 0
+		return false
 	}
-	k := stringsCompare(a.Sym.Name, b.Sym.Name)
-	if k != 0 {
-		return k < 0
+	if a.Sym.Name != b.Sym.Name {
+		return a.Sym.Name < b.Sym.Name
 	}
 	if !exportname(a.Sym.Name) {
-		k := stringsCompare(a.Sym.Pkg.Path, b.Sym.Pkg.Path)
-		if k != 0 {
-			return k < 0
+		if a.Sym.Pkg.Path != b.Sym.Pkg.Path {
+			return a.Sym.Pkg.Path < b.Sym.Pkg.Path
 		}
 	}
 
@@ -648,24 +624,19 @@ func sortinter(t *Type) *Type {
 		return t
 	}
 
-	i := 0
+	var a []*Type
 	for f := t.Type; f != nil; f = f.Down {
-		i++
+		a = append(a, f)
 	}
-	a := make([]*Type, i)
-	i = 0
-	var f *Type
-	for f = t.Type; f != nil; f = f.Down {
-		a[i] = f
-		i++
-	}
-	sort.Sort(methcmp(a[:i]))
-	for i--; i >= 0; i-- {
-		a[i].Down = f
-		f = a[i]
-	}
+	sort.Sort(methcmp(a))
 
-	t.Type = f
+	n := len(a) // n > 0 due to initial conditions.
+	for i := 0; i < n-1; i++ {
+		a[i].Down = a[i+1]
+	}
+	a[n-1].Down = nil
+
+	t.Type = a[0]
 	return t
 }
 
@@ -1978,19 +1949,6 @@ func cheapexpr(n *Node, init **NodeList) *Node {
 	return copyexpr(n, n.Type, init)
 }
 
-/*
- * return n in a local variable of type t if it is not already.
- * the value is guaranteed not to change except by direct
- * assignment to it.
- */
-func localexpr(n *Node, t *Type, init **NodeList) *Node {
-	if n.Op == ONAME && (!n.Addrtaken || strings.HasPrefix(n.Sym.Name, "autotmp_")) && (n.Class == PAUTO || n.Class == PPARAM || n.Class == PPARAMOUT) && convertop(n.Type, t, nil) == OCONVNOP {
-		return n
-	}
-
-	return copyexpr(n, t, init)
-}
-
 func Setmaxarg(t *Type, extra int32) {
 	dowidth(t)
 	w := t.Argwid
@@ -2610,21 +2568,6 @@ func genhash(sym *Sym, t *Type) {
 		n.Colas = true
 		colasdefn(n.List, n)
 		ni = n.List.N
-
-		// TODO: with aeshash we don't need these shift/mul parts
-
-		// h = h<<3 | h>>61
-		n.Nbody = list(n.Nbody, Nod(OAS, nh, Nod(OOR, Nod(OLSH, nh, Nodintconst(3)), Nod(ORSH, nh, Nodintconst(int64(Widthptr)*8-3)))))
-
-		// h *= mul
-		// Same multipliers as in runtime.memhash.
-		var mul int64
-		if Widthptr == 4 {
-			mul = 3267000013
-		} else {
-			mul = 23344194077549503
-		}
-		n.Nbody = list(n.Nbody, Nod(OAS, nh, Nod(OMUL, nh, Nodintconst(mul))))
 
 		// h = hashel(&p[i], h)
 		call := Nod(OCALL, hashel, nil)
