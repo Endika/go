@@ -182,7 +182,7 @@ func declare(n *Node, ctxt uint8) {
 
 	gen := 0
 	if ctxt == PEXTERN {
-		externdcl = list(externdcl, n)
+		externdcl = append(externdcl, n)
 		if dflag() {
 			fmt.Printf("\t%v global decl %v %p\n", Ctxt.Line(int(lineno)), s, n)
 		}
@@ -1499,5 +1499,5 @@ func makefuncsym(s *Sym) {
 	s1 := funcsym(s)
 	s1.Def = newfuncname(s1)
 	s1.Def.Func.Shortname = newname(s)
-	funcsyms = list(funcsyms, s1.Def)
+	funcsyms = append(funcsyms, s1.Def)
 }

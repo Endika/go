@@ -1584,33 +1584,32 @@ func Ptrto(t *Type) *Type {
 }
 
 func frame(context int) {
-	var l *NodeList
-
 	if context != 0 {
 		fmt.Printf("--- external frame ---\n")
-		l = externdcl
-	} else if Curfn != nil {
-		fmt.Printf("--- %v frame ---\n", Curfn.Func.Nname.Sym)
-		l = Curfn.Func.Dcl
-	} else {
+		for _, n := range externdcl {
+			printframenode(n)
+		}
 		return
 	}
 
-	var n *Node
-	var w int64
-	for ; l != nil; l = l.Next {
-		n = l.N
-		w = -1
-		if n.Type != nil {
-			w = n.Type.Width
+	if Curfn != nil {
+		fmt.Printf("--- %v frame ---\n", Curfn.Func.Nname.Sym)
+		for l := Curfn.Func.Dcl; l != nil; l = l.Next {
+			printframenode(l.N)
 		}
-		switch n.Op {
-		case ONAME:
-			fmt.Printf("%v %v G%d %v width=%d\n", Oconv(int(n.Op), 0), n.Sym, n.Name.Vargen, n.Type, w)
+	}
+}
 
-		case OTYPE:
-			fmt.Printf("%v %v width=%d\n", Oconv(int(n.Op), 0), n.Type, w)
-		}
+func printframenode(n *Node) {
+	w := int64(-1)
+	if n.Type != nil {
+		w = n.Type.Width
+	}
+	switch n.Op {
+	case ONAME:
+		fmt.Printf("%v %v G%d %v width=%d\n", Oconv(int(n.Op), 0), n.Sym, n.Name.Vargen, n.Type, w)
+	case OTYPE:
+		fmt.Printf("%v %v width=%d\n", Oconv(int(n.Op), 0), n.Type, w)
 	}
 }
 
@@ -2987,6 +2986,9 @@ func implements(t *Type, iface *Type, m **Type, samename **Type, ptr *int) bool 
 	var followptr bool
 	var rcvr *Type
 	for im := iface.Type; im != nil; im = im.Down {
+		if im.Broke {
+			continue
+		}
 		imtype = methodfunc(im.Type, nil)
 		tm = ifacelookdot(im.Sym, t, &followptr, 0)
 		if tm == nil || tm.Nointerface || !Eqtype(methodfunc(tm.Type, nil), imtype) {
@@ -3358,7 +3360,6 @@ func ngotype(n *Node) *Sym {
  * only in the last segment of the path, and it makes for happier
  * users if we escape that as little as possible.
  *
- * If you edit this, edit ../ld/lib.c:/^pathtoprefix too.
  * If you edit this, edit ../../debug/goobj/read.go:/importPathToPrefix too.
  */
 func pathtoprefix(s string) string {
@@ -3430,17 +3431,13 @@ func isbadimport(path string) bool {
 		return true
 	}
 
-	for i := 0; i < len(reservedimports); i++ {
-		if path == reservedimports[i] {
+	for _, ri := range reservedimports {
+		if path == ri {
 			Yyerror("import path %q is reserved and cannot be used", path)
 			return true
 		}
 	}
 
-	var s string
-	_ = s
-	var r uint
-	_ = r
 	for _, r := range path {
 		if r == utf8.RuneError {
 			Yyerror("import path contains invalid UTF-8 sequence: %q", path)

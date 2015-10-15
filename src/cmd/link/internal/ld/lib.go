@@ -307,7 +307,7 @@ func (mode *BuildMode) Set(s string) error {
 		}
 		*mode = BuildmodeCShared
 	case "shared":
-		if goos != "linux" || goarch != "amd64" {
+		if goos != "linux" || (goarch != "amd64" && goarch != "arm") {
 			return badmode()
 		}
 		*mode = BuildmodeShared
@@ -549,17 +549,14 @@ func loadlib() {
 
 	tlsg := Linklookup(Ctxt, "runtime.tlsg", 0)
 
-	// For most ports, runtime.tlsg is a placeholder symbol for TLS
-	// relocation. However, the Android and Darwin arm ports need it
-	// to be a real variable.
-	//
-	// TODO(crawshaw): android should require leaving the tlsg->type
-	// alone (as the runtime-provided SNOPTRBSS) just like darwin/arm.
-	// But some other part of the linker is expecting STLSBSS.
-	if tlsg.Type != obj.SDYNIMPORT && (goos != "darwin" || Thearch.Thechar != '5') {
+	// runtime.tlsg is used for external linking on platforms that do not define
+	// a variable to hold g in assembly (currently only intel).
+	if tlsg.Type == 0 {
 		tlsg.Type = obj.STLSBSS
+		tlsg.Size = int64(Thearch.Ptrsize)
+	} else if tlsg.Type != obj.SDYNIMPORT {
+		Diag("internal error: runtime declared tlsg variable %d", tlsg.Type)
 	}
-	tlsg.Size = int64(Thearch.Ptrsize)
 	tlsg.Reachable = true
 	Ctxt.Tlsg = tlsg
 
@@ -985,11 +982,14 @@ func hostlink() {
 		if HEADTYPE == obj.Hdarwin {
 			argv = append(argv, "-dynamiclib")
 		} else {
+			// ELF.
 			argv = append(argv, "-Wl,-Bsymbolic")
 			if UseRelro() {
 				argv = append(argv, "-Wl,-z,relro")
 			}
-			argv = append(argv, "-shared")
+			// Pass -z nodelete to mark the shared library as
+			// non-closeable: a dlclose will do nothing.
+			argv = append(argv, "-shared", "-Wl,-z,nodelete")
 		}
 	case BuildmodeShared:
 		// TODO(mwhudson): unless you do this, dynamic relocations fill
@@ -1821,13 +1821,7 @@ func genasmsym(put func(*LSym, string, int, int64, int64, int, *LSym)) {
 
 		case obj.STLSBSS:
 			if Linkmode == LinkExternal && HEADTYPE != obj.Hopenbsd {
-				var type_ int
-				if goos == "android" {
-					type_ = 'B'
-				} else {
-					type_ = 't'
-				}
-				put(s, s.Name, type_, Symaddr(s), s.Size, int(s.Version), s.Gotype)
+				put(s, s.Name, 't', Symaddr(s), s.Size, int(s.Version), s.Gotype)
 			}
 		}
 	}

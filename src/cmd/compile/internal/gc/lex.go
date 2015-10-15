@@ -464,9 +464,9 @@ func Main() {
 	}
 
 	// Phase 9: Check external declarations.
-	for l := externdcl; l != nil; l = l.Next {
-		if l.N.Op == ONAME {
-			typecheck(&l.N, Erv)
+	for i, n := range externdcl {
+		if n.Op == ONAME {
+			typecheck(&externdcl[i], Erv)
 		}
 	}
 
@@ -595,9 +595,7 @@ func findpkg(name string) (file string, ok bool) {
 	// local imports should be canonicalized already.
 	// don't want to see "encoding/../encoding/base64"
 	// as different from "encoding/base64".
-	var q string
-	_ = q
-	if path.Clean(name) != name {
+	if q := path.Clean(name); q != name {
 		Yyerror("non-canonical import path %q (should be %q)", name, q)
 		return "", false
 	}
@@ -838,6 +836,33 @@ func cannedimports(file string, cp string) {
 
 	typecheckok = true
 	incannedimport = 1
+}
+
+func isSpace(c int) bool {
+	return c == ' ' || c == '\t' || c == '\n' || c == '\r'
+}
+
+func isAlpha(c int) bool {
+	return 'A' <= c && c <= 'Z' || 'a' <= c && c <= 'z'
+}
+
+func isDigit(c int) bool {
+	return '0' <= c && c <= '9'
+}
+func isAlnum(c int) bool {
+	return isAlpha(c) || isDigit(c)
+}
+
+func plan9quote(s string) string {
+	if s == "" {
+		return "''"
+	}
+	for _, c := range s {
+		if c <= ' ' || c == '\'' {
+			return "'" + strings.Replace(s, "'", "''", -1) + "'"
+		}
+	}
+	return s
 }
 
 func isfrog(c int) bool {
@@ -2162,32 +2187,22 @@ var syms = []struct {
 	{"insofaras", LIGNORE, Txxx, OXXX},
 }
 
+// lexinit initializes known symbols and the basic types.
 func lexinit() {
-	var lex int
-	var s *Sym
-	var s1 *Sym
-	var t *Type
-	var etype int
+	for _, s := range syms {
+		lex := s.lexical
+		s1 := Lookup(s.name)
+		s1.Lexical = uint16(lex)
 
-	/*
-	 * initialize basic types array
-	 * initialize known symbols
-	 */
-	for i := 0; i < len(syms); i++ {
-		lex = syms[i].lexical
-		s = Lookup(syms[i].name)
-		s.Lexical = uint16(lex)
-
-		etype = syms[i].etype
-		if etype != Txxx {
+		if etype := s.etype; etype != Txxx {
 			if etype < 0 || etype >= len(Types) {
-				Fatalf("lexinit: %s bad etype", s.Name)
+				Fatalf("lexinit: %s bad etype", s.name)
 			}
-			s1 = Pkglookup(syms[i].name, builtinpkg)
-			t = Types[etype]
+			s2 := Pkglookup(s.name, builtinpkg)
+			t := Types[etype]
 			if t == nil {
 				t = typ(etype)
-				t.Sym = s1
+				t.Sym = s2
 
 				if etype != TANY && etype != TSTRING {
 					dowidth(t)
@@ -2195,19 +2210,18 @@ func lexinit() {
 				Types[etype] = t
 			}
 
-			s1.Lexical = LNAME
-			s1.Def = typenod(t)
-			s1.Def.Name = new(Name)
+			s2.Lexical = LNAME
+			s2.Def = typenod(t)
+			s2.Def.Name = new(Name)
 			continue
 		}
 
-		etype = syms[i].op
-		if etype != OXXX {
-			s1 = Pkglookup(syms[i].name, builtinpkg)
-			s1.Lexical = LNAME
-			s1.Def = Nod(ONAME, nil, nil)
-			s1.Def.Sym = s1
-			s1.Def.Etype = uint8(etype)
+		if etype := s.op; etype != OXXX {
+			s2 := Pkglookup(s.name, builtinpkg)
+			s2.Lexical = LNAME
+			s2.Def = Nod(ONAME, nil, nil)
+			s2.Def.Sym = s2
+			s2.Def.Etype = uint8(etype)
 		}
 	}
 
@@ -2220,7 +2234,7 @@ func lexinit() {
 
 	idealbool = typ(TBOOL)
 
-	s = Pkglookup("true", builtinpkg)
+	s := Pkglookup("true", builtinpkg)
 	s.Def = Nodbool(true)
 	s.Def.Sym = Lookup("true")
 	s.Def.Name = new(Name)
@@ -2419,61 +2433,56 @@ func lexfini() {
 	nodfp.Sym = Lookup(".fp")
 }
 
-var lexn = []struct {
-	lex  int
-	name string
-}{
-	{LANDAND, "ANDAND"},
-	{LANDNOT, "ANDNOT"},
-	{LASOP, "ASOP"},
-	{LBREAK, "BREAK"},
-	{LCASE, "CASE"},
-	{LCHAN, "CHAN"},
-	{LCOLAS, "COLAS"},
-	{LCOMM, "<-"},
-	{LCONST, "CONST"},
-	{LCONTINUE, "CONTINUE"},
-	{LDDD, "..."},
-	{LDEC, "DEC"},
-	{LDEFAULT, "DEFAULT"},
-	{LDEFER, "DEFER"},
-	{LELSE, "ELSE"},
-	{LEQ, "EQ"},
-	{LFALL, "FALL"},
-	{LFOR, "FOR"},
-	{LFUNC, "FUNC"},
-	{LGE, "GE"},
-	{LGO, "GO"},
-	{LGOTO, "GOTO"},
-	{LGT, "GT"},
-	{LIF, "IF"},
-	{LIMPORT, "IMPORT"},
-	{LINC, "INC"},
-	{LINTERFACE, "INTERFACE"},
-	{LLE, "LE"},
-	{LLITERAL, "LITERAL"},
-	{LLSH, "LSH"},
-	{LLT, "LT"},
-	{LMAP, "MAP"},
-	{LNAME, "NAME"},
-	{LNE, "NE"},
-	{LOROR, "OROR"},
-	{LPACKAGE, "PACKAGE"},
-	{LRANGE, "RANGE"},
-	{LRETURN, "RETURN"},
-	{LRSH, "RSH"},
-	{LSELECT, "SELECT"},
-	{LSTRUCT, "STRUCT"},
-	{LSWITCH, "SWITCH"},
-	{LTYPE, "TYPE"},
-	{LVAR, "VAR"},
+var lexn = map[int]string{
+	LANDAND:    "ANDAND",
+	LANDNOT:    "ANDNOT",
+	LASOP:      "ASOP",
+	LBREAK:     "BREAK",
+	LCASE:      "CASE",
+	LCHAN:      "CHAN",
+	LCOLAS:     "COLAS",
+	LCOMM:      "<-",
+	LCONST:     "CONST",
+	LCONTINUE:  "CONTINUE",
+	LDDD:       "...",
+	LDEC:       "DEC",
+	LDEFAULT:   "DEFAULT",
+	LDEFER:     "DEFER",
+	LELSE:      "ELSE",
+	LEQ:        "EQ",
+	LFALL:      "FALL",
+	LFOR:       "FOR",
+	LFUNC:      "FUNC",
+	LGE:        "GE",
+	LGO:        "GO",
+	LGOTO:      "GOTO",
+	LGT:        "GT",
+	LIF:        "IF",
+	LIMPORT:    "IMPORT",
+	LINC:       "INC",
+	LINTERFACE: "INTERFACE",
+	LLE:        "LE",
+	LLITERAL:   "LITERAL",
+	LLSH:       "LSH",
+	LLT:        "LT",
+	LMAP:       "MAP",
+	LNAME:      "NAME",
+	LNE:        "NE",
+	LOROR:      "OROR",
+	LPACKAGE:   "PACKAGE",
+	LRANGE:     "RANGE",
+	LRETURN:    "RETURN",
+	LRSH:       "RSH",
+	LSELECT:    "SELECT",
+	LSTRUCT:    "STRUCT",
+	LSWITCH:    "SWITCH",
+	LTYPE:      "TYPE",
+	LVAR:       "VAR",
 }
 
 func lexname(lex int) string {
-	for i := 0; i < len(lexn); i++ {
-		if lexn[i].lex == lex {
-			return lexn[i].name
-		}
+	if s, ok := lexn[lex]; ok {
+		return s
 	}
 	return fmt.Sprintf("LEX-%d", lex)
 }

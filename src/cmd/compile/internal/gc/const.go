@@ -10,6 +10,19 @@ import (
 	"strings"
 )
 
+// IntLiteral returns the Node's literal value as an interger.
+func (n *Node) IntLiteral() (x int64, ok bool) {
+	switch {
+	case n == nil:
+		return
+	case Isconst(n, CTINT):
+		return n.Int(), true
+	case Isconst(n, CTBOOL):
+		return int64(obj.Bool2int(n.Bool())), true
+	}
+	return
+}
+
 // Int returns n as an int.
 // n must be an integer constant.
 func (n *Node) Int() int64 {
@@ -986,37 +999,37 @@ func evconst(n *Node) {
 		goto setfalse
 
 	case OEQ<<16 | CTSTR:
-		if cmpslit(nl, nr) == 0 {
+		if strlit(nl) == strlit(nr) {
 			goto settrue
 		}
 		goto setfalse
 
 	case ONE<<16 | CTSTR:
-		if cmpslit(nl, nr) != 0 {
+		if strlit(nl) != strlit(nr) {
 			goto settrue
 		}
 		goto setfalse
 
 	case OLT<<16 | CTSTR:
-		if cmpslit(nl, nr) < 0 {
+		if strlit(nl) < strlit(nr) {
 			goto settrue
 		}
 		goto setfalse
 
 	case OLE<<16 | CTSTR:
-		if cmpslit(nl, nr) <= 0 {
+		if strlit(nl) <= strlit(nr) {
 			goto settrue
 		}
 		goto setfalse
 
 	case OGE<<16 | CTSTR:
-		if cmpslit(nl, nr) >= 0 {
+		if strlit(nl) >= strlit(nr) {
 			goto settrue
 		}
 		goto setfalse
 
 	case OGT<<16 | CTSTR:
-		if cmpslit(nl, nr) > 0 {
+		if strlit(nl) > strlit(nr) {
 			goto settrue
 		}
 		goto setfalse
@@ -1341,8 +1354,9 @@ func defaultlit2(lp **Node, rp **Node, force int) {
 	Convlit(rp, Types[TINT])
 }
 
-func cmpslit(l, r *Node) int {
-	return stringsCompare(l.Val().U.(string), r.Val().U.(string))
+// strlit returns the value of a literal string Node as a string.
+func strlit(n *Node) string {
+	return n.Val().U.(string)
 }
 
 func Smallintconst(n *Node) bool {

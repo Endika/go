@@ -51,7 +51,7 @@ func (wp wbufptr) ptr() *workbuf {
 //     (preemption must be disabled)
 //     gcw := &getg().m.p.ptr().gcw
 //     .. call gcw.put() to produce and gcw.get() to consume ..
-//     if gcphase == _GCmarktermination {
+//     if gcBlackenPromptly {
 //         gcw.dispose()
 //     }
 //
@@ -68,7 +68,7 @@ type gcWork struct {
 	bytesMarked uint64
 
 	// Scan work performed on this gcWork. This is aggregated into
-	// gcController by dispose.
+	// gcController by dispose and may also be flushed by callers.
 	scanWork int64
 }
 

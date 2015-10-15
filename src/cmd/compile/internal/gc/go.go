@@ -376,7 +376,6 @@ type Sig struct {
 	type_  *Type
 	mtype  *Type
 	offset int32
-	link   *Sig
 }
 
 type Io struct {
@@ -584,13 +583,13 @@ var maxfltval [NTYPE]*Mpflt
 
 var xtop *NodeList
 
-var externdcl *NodeList
+var externdcl []*Node
 
 var exportlist []*Node
 
 var importlist []*Node // imported functions and methods with inlinable bodies
 
-var funcsyms *NodeList
+var funcsyms []*Node
 
 var dclcontext uint8 // PEXTERN/PAUTO
 
