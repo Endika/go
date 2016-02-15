@@ -14,6 +14,7 @@ import (
 	"bytes"
 	"encoding"
 	"encoding/base64"
+	"fmt"
 	"math"
 	"reflect"
 	"runtime"
@@ -529,8 +530,13 @@ var (
 func stringEncoder(e *encodeState, v reflect.Value, quoted bool) {
 	if v.Type() == numberType {
 		numStr := v.String()
+		// In Go1.5 the empty string encodes to "0", while this is not a valid number literal
+		// we keep compatibility so check validity after this.
 		if numStr == "" {
 			numStr = "0" // Number's zero-val
+		}
+		if !isValidNumber(numStr) {
+			e.error(fmt.Errorf("json: invalid number literal %q", numStr))
 		}
 		e.WriteString(numStr)
 		return
@@ -1021,7 +1027,7 @@ func typeFields(t reflect.Type) []field {
 			// Scan f.typ for fields to include.
 			for i := 0; i < f.typ.NumField(); i++ {
 				sf := f.typ.Field(i)
-				if sf.PkgPath != "" { // unexported
+				if sf.PkgPath != "" && !sf.Anonymous { // unexported
 					continue
 				}
 				tag := sf.Tag.Get("json")

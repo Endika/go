@@ -180,7 +180,7 @@ func (t *Template) Execute(wr io.Writer, data interface{}) (err error) {
 }
 
 // DefinedTemplates returns a string listing the defined templates,
-// prefixed by the string "defined templates are: ". If there are none,
+// prefixed by the string "; defined templates are: ". If there are none,
 // it returns the empty string. For generating an error message here
 // and in html/template.
 func (t *Template) DefinedTemplates() string {
@@ -523,7 +523,7 @@ func (s *state) evalField(dot reflect.Value, fieldName string, node parse.Node, 
 		return zero
 	}
 	typ := receiver.Type()
-	receiver, _ = indirect(receiver)
+	receiver, isNil := indirect(receiver)
 	// Unless it's an interface, need to get to a value of type *T to guarantee
 	// we see all methods of T and *T.
 	ptr := receiver
@@ -535,7 +535,6 @@ func (s *state) evalField(dot reflect.Value, fieldName string, node parse.Node, 
 	}
 	hasArgs := len(args) > 1 || final.IsValid()
 	// It's not a method; must be a field of a struct or an element of a map. The receiver must not be nil.
-	receiver, isNil := indirect(receiver)
 	if isNil {
 		s.errorf("nil pointer evaluating %s.%s", typ, fieldName)
 	}
